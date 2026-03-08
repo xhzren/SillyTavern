@@ -126,6 +126,9 @@ router.post('/status', async function (request, response) {
  * Returns { success, count }.
  */
 router.post('/build', async function (request, response) {
+    const LOG_INTERVAL = 50;
+    /** @type {fs.WriteStream|null} */
+    let stream = null;
     try {
         const dirs = request.user.directories;
         const files = fs.readdirSync(dirs.characters);
@@ -137,55 +140,72 @@ router.post('/build', async function (request, response) {
         // Clear memory cache before starting to free up space
         clearMemoryCache();
 
-        const allCharacters = [];
+        const indexPath = getIndexPath(dirs);
+        // Write index file incrementally using a stream to avoid holding all records in memory
+        stream = fs.createWriteStream(indexPath, { encoding: 'utf8' });
 
-        for (let i = 0; i < pngFiles.length; i += BUILD_BATCH_SIZE) {
-            const batch = pngFiles.slice(i, i + BUILD_BATCH_SIZE);
-            const results = await Promise.all(
-                batch.map(async (file) => {
-                    const char = await processCharacter(file, dirs, { shallow: true, skipCache: true });
-                    if (!char || !char.name) return null;
+        // Write JSON header
+        const header = JSON.stringify({ version: INDEX_VERSION, built_at: new Date().toISOString(), count: total });
+        // We'll patch the count at the end; for now write the opening of the characters array
+        stream.write('{"version":' + INDEX_VERSION + ',"built_at":"' + new Date().toISOString() + '","characters":[');
 
-                    // Get file modification time as date_added
-                    let date_added = 0;
-                    try {
-                        const stat = await fsPromises.stat(path.join(dirs.characters, file));
-                        date_added = stat.mtimeMs;
-                    } catch { /* ignore */ }
+        let count = 0;
+        let firstRecord = true;
 
-                    return {
-                        avatar: char.avatar,
-                        name: char.data?.name ?? char.name ?? '',
-                        creator: char.data?.creator ?? '',
-                        character_version: char.data?.character_version ?? '',
-                        fav: !!(char.fav || char.data?.extensions?.fav),
-                        date_added: date_added ? new Date(date_added).toISOString() : new Date(0).toISOString(),
-                        date_last_chat: char.date_last_chat ? new Date(char.date_last_chat).toISOString() : new Date(0).toISOString(),
-                    };
-                }),
-            );
+        // Process ONE file at a time sequentially — avoids PNG buffer pile-up in the event loop
+        for (let i = 0; i < pngFiles.length; i++) {
+            const file = pngFiles[i];
+            try {
+                // skipCache: true — don't let readCharacterData touch memoryCache or diskCache
+                const char = await processCharacter(file, dirs, { shallow: true, skipCache: true });
+                if (!char || !char.name) continue;
 
-            allCharacters.push(...results.filter(Boolean));
-            console.log(`[CharacterIndex] Processed ${Math.min(i + BUILD_BATCH_SIZE, total)}/${total}`);
+                const stat = fs.statSync(path.join(dirs.characters, file));
+                const date_added = stat.mtimeMs;
+
+                /** @type {object} */
+                const record = {
+                    avatar: char.avatar,
+                    name: char.data?.name ?? char.name ?? '',
+                    creator: char.data?.creator ?? '',
+                    character_version: char.data?.character_version ?? '',
+                    fav: !!(char.fav || char.data?.extensions?.fav),
+                    date_added: date_added ? new Date(date_added).toISOString() : new Date(0).toISOString(),
+                    date_last_chat: char.date_last_chat ? new Date(char.date_last_chat).toISOString() : new Date(0).toISOString(),
+                };
+
+                // Write record directly to stream — never accumulate into an array
+                if (!firstRecord) stream.write(',');
+                stream.write(JSON.stringify(record));
+                firstRecord = false;
+                count++;
+            } catch (err) {
+                console.warn(`[CharacterIndex] Skipping ${file}:`, err.message);
+            }
+
+            if ((i + 1) % LOG_INTERVAL === 0 || i + 1 === total) {
+                console.log(`[CharacterIndex] Processed ${i + 1}/${total}`);
+                // Yield to the event loop so GC can run between batches
+                await new Promise(r => setImmediate(r));
+            }
         }
 
-        const indexData = {
-            version: INDEX_VERSION,
-            built_at: new Date().toISOString(),
-            count: allCharacters.length,
-            characters: allCharacters,
-        };
+        // Close the JSON structure and finish the stream
+        stream.write('],"count":' + count + '}');
+        await new Promise((resolve, reject) => {
+            if (stream) stream.end(err => err ? reject(err) : resolve(undefined));
+            else resolve(undefined);
+        });
 
-        const indexPath = getIndexPath(dirs);
-        await fsPromises.writeFile(indexPath, JSON.stringify(indexData), 'utf8');
-
-        console.log(`[CharacterIndex] Index built: ${allCharacters.length} characters → ${indexPath}`);
-        return response.json({ success: true, count: allCharacters.length });
+        console.log(`[CharacterIndex] Index built: ${count} characters → ${indexPath}`);
+        return response.json({ success: true, count });
     } catch (err) {
+        if (stream) stream.destroy();
         console.error('[CharacterIndex] build error:', err);
         return response.status(500).json({ error: true, message: String(err) });
     }
 });
+
 
 /**
  * POST /api/characters/index/data
