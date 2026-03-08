@@ -186,7 +186,7 @@ async function readCharacterData(inputFile, inputFormat = 'png', { skipCache = f
     if (memoryCache.has(cacheKey)) {
         return memoryCache.get(cacheKey);
     }
-    if (useDiskCache) {
+    if (useDiskCache && !skipCache) {
         try {
             const cache = await diskCache.instance();
             const cachedData = await cache.getItem(cacheKey);
@@ -200,7 +200,7 @@ async function readCharacterData(inputFile, inputFormat = 'png', { skipCache = f
 
     const result = await parse(inputFile, inputFormat);
     !isAndroid && !skipCache && memoryCache.set(cacheKey, result);
-    if (useDiskCache) {
+    if (useDiskCache && !skipCache) {
         try {
             const cache = await diskCache.instance();
             await cache.setItem(cacheKey, result);
