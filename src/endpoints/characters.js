@@ -174,12 +174,14 @@ function getCacheKey(inputFile) {
 }
 
 /**
- * Reads the character card from the specified image file.
+ * Reads character card data from the specified image file.
  * @param {string} inputFile - Path to the image file
  * @param {string} inputFormat - 'png'
+ * @param {object} [options] - Options
+ * @param {boolean} [options.skipCache] - If true, the data will not be cached in memory
  * @returns {Promise<string | undefined>} - Character card data
  */
-async function readCharacterData(inputFile, inputFormat = 'png') {
+async function readCharacterData(inputFile, inputFormat = 'png', { skipCache = false } = {}) {
     const cacheKey = getCacheKey(inputFile);
     if (memoryCache.has(cacheKey)) {
         return memoryCache.get(cacheKey);
@@ -197,7 +199,7 @@ async function readCharacterData(inputFile, inputFormat = 'png') {
     }
 
     const result = await parse(inputFile, inputFormat);
-    !isAndroid && memoryCache.set(cacheKey, result);
+    !isAndroid && !skipCache && memoryCache.set(cacheKey, result);
     if (useDiskCache) {
         try {
             const cache = await diskCache.instance();
@@ -402,12 +404,13 @@ const toShallow = (character) => {
  * @param  {import('../users.js').UserDirectoryList} directories User directories
  * @param  {object} options Options for the character processing
  * @param  {boolean} options.shallow If true, only return the core character's metadata
+ * @param  {boolean} options.skipCache If true, the character data will not be cached in memory
  * @return {Promise<object>}     A Promise that resolves when the character processing is done.
  */
-export const processCharacter = async (item, directories, { shallow }) => {
+export const processCharacter = async (item, directories, { shallow, skipCache = false }) => {
     try {
         const imgFile = path.join(directories.characters, item);
-        const imgData = await readCharacterData(imgFile);
+        const imgData = await readCharacterData(imgFile, 'png', { skipCache });
         if (imgData === undefined) throw new Error('Failed to read character file');
 
         let jsonObject = getCharaCardV2(JSON.parse(imgData), directories, false);
@@ -1362,7 +1365,7 @@ router.post('/all', async function (request, response) {
     try {
         const files = fs.readdirSync(request.user.directories.characters);
         const pngFiles = files.filter(file => file.endsWith('.png'));
-        const processingPromises = pngFiles.map(file => processCharacter(file, request.user.directories, { shallow: useShallowCharacters }));
+        const processingPromises = pngFiles.map(file => processCharacter(file, request.user.directories, { shallow: useShallowCharacters, skipCache: false }));
         const data = (await Promise.all(processingPromises)).filter(c => c.name);
         return response.send(data);
     } catch (err) {
@@ -1382,7 +1385,7 @@ router.post('/get', validateAvatarUrlMiddleware, async function (request, respon
             return response.sendStatus(404);
         }
 
-        const data = await processCharacter(item, request.user.directories, { shallow: false });
+        const data = await processCharacter(item, request.user.directories, { shallow: false, skipCache: false });
 
         return response.send(data);
     } catch (err) {
@@ -1589,3 +1592,6 @@ router.post('/export', validateAvatarUrlMiddleware, async function (request, res
         response.sendStatus(500);
     }
 });
+export function clearMemoryCache() {
+    memoryCache.clear();
+}

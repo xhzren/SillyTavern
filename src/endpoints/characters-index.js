@@ -31,7 +31,7 @@ import sanitize from 'sanitize-filename';
 import yaml from 'yaml';
 import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import { getConfigValue } from '../util.js';
-import { processCharacter } from './characters.js';
+import { processCharacter, clearMemoryCache } from './characters.js';
 import { parse } from '../character-card-parser.js';
 import { CharXParser } from '../charx.js';
 
@@ -41,7 +41,7 @@ export const router = express.Router();
 const INDEX_FILE_NAME = 'characters_index.json';
 
 /** Number of PNGs processed per batch (avoid blocking the event loop) */
-const BUILD_BATCH_SIZE = 50;
+const BUILD_BATCH_SIZE = 10;
 
 /** Schema version — bump to invalidate existing caches */
 const INDEX_VERSION = 2;
@@ -134,13 +134,16 @@ router.post('/build', async function (request, response) {
 
         console.log(`[CharacterIndex] Building index for ${total} character(s)…`);
 
+        // Clear memory cache before starting to free up space
+        clearMemoryCache();
+
         const allCharacters = [];
 
         for (let i = 0; i < pngFiles.length; i += BUILD_BATCH_SIZE) {
             const batch = pngFiles.slice(i, i + BUILD_BATCH_SIZE);
             const results = await Promise.all(
                 batch.map(async (file) => {
-                    const char = await processCharacter(file, dirs, { shallow: true });
+                    const char = await processCharacter(file, dirs, { shallow: true, skipCache: true });
                     if (!char || !char.name) return null;
 
                     // Get file modification time as date_added
@@ -409,7 +412,7 @@ async function modifyIndexFile(directories, modifierFn) {
 export async function addOrUpdateCharacterInIndex(directories, avatarUrl) {
     if (!isCharacterIndexEnabled()) return;
     try {
-        const char = await processCharacter(avatarUrl, directories, { shallow: true });
+        const char = await processCharacter(avatarUrl, directories, { shallow: true, skipCache: false });
         if (!char || !char.name) return;
         
         const avatarPath = path.join(directories.characters, String(avatarUrl));
