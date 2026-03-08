@@ -2335,6 +2335,10 @@ const compareFunc = (first, second) => {
     const b = second[power_user.sort_field];
 
     if (power_user.sort_field === 'create_date') {
+        // User requested Newest/Oldest to sort by date_added
+        return sortMoments(timestampToMoment(second.date_added), timestampToMoment(first.date_added));
+    }
+    if (power_user.sort_field === 'date_last_chat' || power_user.sort_field === 'date_added') {
         return sortMoments(timestampToMoment(b), timestampToMoment(a));
     }
 
@@ -3712,7 +3716,7 @@ jQuery(() => {
         saveSettingsDebounced();
     });
 
-    $('#character_sort_order').on('change', function () {
+    $('#character_sort_order').on('change', async function () {
         const field = String($(this).find(':selected').data('field'));
         // Save sort order, but do not save search sorting, as this is a temporary sorting option
         if (field !== 'search') {

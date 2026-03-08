@@ -1,0 +1,293 @@
+/**
+ * Character Index Cache - Backend Endpoints
+ *
+ * Provides a pre-built JSON index of all character cards for fast startup
+ * and server-side pagination, avoiding repeated PNG parsing.
+ *
+ * Index file location:  <user_data_root>/characters_index.json
+ *
+ * Enable via config.yaml:
+ *   performance:
+ *     characterIndexCache: true
+ *
+ * Index record format (per character):
+ *   {
+ *     avatar:            string   — PNG filename (identifier)
+ *     name:              string   — Display name from data.name
+ *     creator:           string   — From data.creator
+ *     character_version: string   — From data.character_version
+ *     fav:               boolean  — Favourite status
+ *     date_added:        number   — PNG file mtime (ms since epoch)
+ *     date_last_chat:    number   — From character data (ms), 0 if unknown
+ *   }
+ */
+
+import path from 'node:path';
+import fs from 'node:fs';
+import { promises as fsPromises } from 'node:fs';
+
+import express from 'express';
+import { getConfigValue } from '../util.js';
+import { processCharacter } from './characters.js';
+
+export const router = express.Router();
+
+/** Filename of the index cache inside the user's data root */
+const INDEX_FILE_NAME = 'characters_index.json';
+
+/** Number of PNGs processed per batch (avoid blocking the event loop) */
+const BUILD_BATCH_SIZE = 50;
+
+/** Schema version — bump to invalidate existing caches */
+const INDEX_VERSION = 2;
+
+/** Supported sort fields and their comparators */
+const SORT_COMPARATORS = {
+    'a-z': (a, b) => (a.name ?? '').localeCompare(b.name ?? '', undefined, { sensitivity: 'base' }),
+    'z-a': (a, b) => (b.name ?? '').localeCompare(a.name ?? '', undefined, { sensitivity: 'base' }),
+    'date_added': (a, b) => (a.date_added ?? 0) - (b.date_added ?? 0),
+    'date_added_asc': (a, b) => (b.date_added ?? 0) - (a.date_added ?? 0),
+    'date_last_chat': (a, b) => (a.date_last_chat ?? 0) - (b.date_last_chat ?? 0),
+    'date_last_chat_asc': (a, b) => (b.date_last_chat ?? 0) - (a.date_last_chat ?? 0),
+    'fav': (a, b) => (b.fav ? 1 : 0) - (a.fav ? 1 : 0),
+};
+
+/**
+ * @param {import('../users.js').UserDirectoryList} directories
+ * @returns {string}
+ */
+function getIndexPath(directories) {
+    return path.join(directories.root, INDEX_FILE_NAME);
+}
+
+/**
+ * Reads and parses the index file, returning the characters array.
+ * Returns null if the file doesn't exist or is malformed.
+ * @param {string} indexPath
+ * @returns {Promise<object[]|null>}
+ */
+async function readIndexCharacters(indexPath) {
+    if (!fs.existsSync(indexPath)) return null;
+    try {
+        const raw = await fsPromises.readFile(indexPath, 'utf8');
+        const data = JSON.parse(raw);
+        return Array.isArray(data.characters) ? data.characters : null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * @returns {boolean}
+ */
+export function isCharacterIndexEnabled() {
+    return !!getConfigValue('performance.characterIndexCache', false, 'boolean');
+}
+
+/**
+ * POST /api/characters/index/status
+ * Returns { exists, count, builtAt, enabled }
+ */
+router.post('/status', async function (request, response) {
+    try {
+        const indexPath = getIndexPath(request.user.directories);
+        const exists = fs.existsSync(indexPath);
+        let count = 0;
+        let builtAt = null;
+
+        if (exists) {
+            try {
+                const raw = await fsPromises.readFile(indexPath, 'utf8');
+                const data = JSON.parse(raw);
+                count = Array.isArray(data.characters) ? data.characters.length : 0;
+                builtAt = data.built_at ?? null;
+            } catch { /* ignore */ }
+        }
+
+        return response.json({ exists, count, builtAt, enabled: isCharacterIndexEnabled() });
+    } catch (err) {
+        console.error('[CharacterIndex] status error:', err);
+        return response.status(500).json({ error: true });
+    }
+});
+
+/**
+ * POST /api/characters/index/build
+ *
+ * Scans all PNG files in batches, extracts metadata, and saves the index.
+ * Saved fields per character:
+ *   avatar, name, creator, character_version, fav, date_added, date_last_chat
+ *
+ * Returns { success, count }.
+ */
+router.post('/build', async function (request, response) {
+    try {
+        const dirs = request.user.directories;
+        const files = fs.readdirSync(dirs.characters);
+        const pngFiles = files.filter(f => f.endsWith('.png'));
+        const total = pngFiles.length;
+
+        console.log(`[CharacterIndex] Building index for ${total} character(s)…`);
+
+        const allCharacters = [];
+
+        for (let i = 0; i < pngFiles.length; i += BUILD_BATCH_SIZE) {
+            const batch = pngFiles.slice(i, i + BUILD_BATCH_SIZE);
+            const results = await Promise.all(
+                batch.map(async (file) => {
+                    const char = await processCharacter(file, dirs, { shallow: true });
+                    if (!char || !char.name) return null;
+
+                    // Get file modification time as date_added
+                    let date_added = 0;
+                    try {
+                        const stat = await fsPromises.stat(path.join(dirs.characters, file));
+                        date_added = stat.mtimeMs;
+                    } catch { /* ignore */ }
+
+                    return {
+                        avatar: char.avatar,
+                        name: char.data?.name ?? char.name ?? '',
+                        creator: char.data?.creator ?? '',
+                        character_version: char.data?.character_version ?? '',
+                        fav: !!(char.fav || char.data?.extensions?.fav),
+                        date_added: date_added ? new Date(date_added).toISOString() : new Date(0).toISOString(),
+                        date_last_chat: char.date_last_chat ? new Date(char.date_last_chat).toISOString() : new Date(0).toISOString(),
+                    };
+                }),
+            );
+
+            allCharacters.push(...results.filter(Boolean));
+            console.log(`[CharacterIndex] Processed ${Math.min(i + BUILD_BATCH_SIZE, total)}/${total}`);
+        }
+
+        const indexData = {
+            version: INDEX_VERSION,
+            built_at: new Date().toISOString(),
+            count: allCharacters.length,
+            characters: allCharacters,
+        };
+
+        const indexPath = getIndexPath(dirs);
+        await fsPromises.writeFile(indexPath, JSON.stringify(indexData), 'utf8');
+
+        console.log(`[CharacterIndex] Index built: ${allCharacters.length} characters → ${indexPath}`);
+        return response.json({ success: true, count: allCharacters.length });
+    } catch (err) {
+        console.error('[CharacterIndex] build error:', err);
+        return response.status(500).json({ error: true, message: String(err) });
+    }
+});
+
+/**
+ * POST /api/characters/index/data
+ * Returns the full characters array from the index file.
+ */
+router.post('/data', async function (request, response) {
+    try {
+        const indexPath = getIndexPath(request.user.directories);
+        const characters = await readIndexCharacters(indexPath);
+        if (!characters) {
+            return response.status(404).json({ error: true, message: 'Index not found or malformed' });
+        }
+        return response.json(characters);
+    } catch (err) {
+        console.error('[CharacterIndex] data error:', err);
+        return response.status(500).json({ error: true, message: String(err) });
+    }
+});
+
+/**
+ * POST /api/characters/index/page
+ *
+ * Returns a paginated, sorted slice of the index.
+ *
+ * Request body:
+ *   {
+ *     page:     number   (1-based, default: 1)
+ *     pageSize: number   (default: 50)
+ *     sortBy:   string   (default: 'a-z')
+ *                        Supported: 'a-z', 'z-a', 'date_added', 'date_added_asc',
+ *                                   'date_last_chat', 'date_last_chat_asc', 'fav'
+ *   }
+ *
+ * Response:
+ *   {
+ *     characters: object[],
+ *     total:      number,      — total characters in index
+ *     page:       number,
+ *     pageSize:   number,
+ *     totalPages: number,
+ *   }
+ */
+router.post('/page', async function (request, response) {
+    try {
+        const indexPath = getIndexPath(request.user.directories);
+        const allCharacters = await readIndexCharacters(indexPath);
+
+        if (!allCharacters) {
+            return response.status(404).json({ error: true, message: 'Index not found. Call /build first.' });
+        }
+
+        const page = Math.max(1, parseInt(request.body.page ?? 1, 10) || 1);
+        const pageSize = Math.max(1, Math.min(1000, parseInt(request.body.pageSize ?? 50, 10) || 50));
+        const sortBy = String(request.body.sortBy ?? 'a-z');
+
+        // Sort
+        const sorted = [...allCharacters];
+        const comparator = SORT_COMPARATORS[sortBy] ?? SORT_COMPARATORS['a-z'];
+        sorted.sort(comparator);
+
+        // Paginate
+        const total = sorted.length;
+        const totalPages = Math.max(1, Math.ceil(total / pageSize));
+        const safePage = Math.min(page, totalPages);
+        const start = (safePage - 1) * pageSize;
+        const characters = sorted.slice(start, start + pageSize);
+
+        return response.json({ characters, total, page: safePage, pageSize, totalPages });
+    } catch (err) {
+        console.error('[CharacterIndex] page error:', err);
+        return response.status(500).json({ error: true, message: String(err) });
+    }
+});
+
+/**
+ * POST /api/characters/index/delete
+ * Deletes the index file, forcing a rebuild on next /build call.
+ */
+router.post('/delete', async function (request, response) {
+    try {
+        const indexPath = getIndexPath(request.user.directories);
+        if (fs.existsSync(indexPath)) {
+            await fsPromises.unlink(indexPath);
+            console.log('[CharacterIndex] Index deleted:', indexPath);
+            return response.json({ success: true });
+        }
+        return response.json({ success: false, message: 'Index file not found' });
+    } catch (err) {
+        console.error('[CharacterIndex] delete error:', err);
+        return response.status(500).json({ error: true });
+    }
+});
+
+/**
+ * POST /api/characters/index/favorites
+ * Returns an array of all favorited characters from the index.
+ */
+router.post('/favorites', async function (request, response) {
+    try {
+        const indexPath = getIndexPath(request.user.directories);
+        const allCharacters = await readIndexCharacters(indexPath);
+
+        if (!allCharacters) {
+            return response.json([]);
+        }
+
+        const favs = allCharacters.filter(x => x.fav === true);
+        return response.json(favs);
+    } catch (err) {
+        console.error('[CharacterIndex] favorites error:', err);
+        return response.json([]);
+    }
+});

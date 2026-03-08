@@ -285,6 +285,7 @@ import { MacroEnvBuilder } from './scripts/macros/engine/MacroEnvBuilder.js';
 import { MacroEngine } from './scripts/macros/engine/MacroEngine.js';
 import { addChatBackupsBrowser } from './scripts/chat-backups.js';
 import { onboardingExperimentalMacroEngine } from './scripts/macros/engine/MacroDiagnostics.js';
+import { initCharacterIndex, loadCharacterIndexAll } from './scripts/characters-index.js';
 
 // API OBJECT FOR EXTERNAL WIRING
 globalThis.SillyTavern = {
@@ -705,7 +706,22 @@ async function firstLoadInit() {
     initTags();
     initBookmarks();
     await getUserAvatars(true, user_avatar);
-    await getCharacters();
+    // Check character index cache before the full getCharacters() scan.
+    // If the index exists and is valid, load from it and skip the heavy getCharacters().
+    // If not, build the index first (batch-scan all PNGs), then load from it.
+    // Falls back to normal getCharacters() only on error.
+    const loadedFromIndex = await initCharacterIndex({
+        characters,
+        getRequestHeaders,
+        humanizedDateTime,
+        DOMPurify,
+    });
+    if (!loadedFromIndex) {
+        await getCharacters();
+    } else {
+        await getGroups();
+        await printCharacters(true);
+    }
     await getBackgrounds();
     await initTokenizers();
     initBackgrounds();
@@ -966,10 +982,12 @@ export async function printCharacters(fullRefresh = false) {
 
     const entities = getEntitiesList({ doFilter: true });
 
+    let dataSource = entities;
+
     const pageSize = Number(accountStorage.getItem(storageKey)) || per_page_default;
     const sizeChangerOptions = [10, 25, 50, 100, 250, 500, 1000];
     $('#rm_print_characters_pagination').pagination({
-        dataSource: entities,
+        dataSource: dataSource,
         pageSize,
         pageRange: 1,
         pageNumber: saveCharactersPage || 1,
@@ -986,12 +1004,16 @@ export async function printCharacters(fullRefresh = false) {
             if (power_user.bogus_folders && isBogusFolderOpen()) {
                 $(listId).append(getBackBlock());
             }
-            if (!data.length) {
+
+            const renderData = data;
+
+            if (!renderData.length) {
                 const emptyBlock = await getEmptyBlock();
                 $(listId).append(emptyBlock);
             }
             let displayCount = 0;
-            for (const i of data) {
+            for (const i of renderData) {
+                if (!i) continue;
                 switch (i.type) {
                     case 'character':
                         $(listId).append(getCharacterBlock(i.item, i.id));

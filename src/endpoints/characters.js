@@ -403,7 +403,7 @@ const toShallow = (character) => {
  * @param  {boolean} options.shallow If true, only return the core character's metadata
  * @return {Promise<object>}     A Promise that resolves when the character processing is done.
  */
-const processCharacter = async (item, directories, { shallow }) => {
+export const processCharacter = async (item, directories, { shallow }) => {
     try {
         const imgFile = path.join(directories.characters, item);
         const imgData = await readCharacterData(imgFile);
