@@ -291,3 +291,94 @@ router.post('/favorites', async function (request, response) {
         return response.json([]);
     }
 });
+
+/**
+ * Safely update the characters index file
+ * @param {import('../users.js').UserDirectoryList} directories
+ * @param {function(object[]): boolean} modifierFn Returns true if changes were made
+ */
+async function modifyIndexFile(directories, modifierFn) {
+    const indexPath = getIndexPath(directories);
+    if (!fs.existsSync(indexPath)) return;
+    try {
+        const raw = await fsPromises.readFile(indexPath, 'utf8');
+        const data = JSON.parse(raw);
+        if (Array.isArray(data.characters)) {
+            if (modifierFn(data.characters)) {
+                await fsPromises.writeFile(indexPath, JSON.stringify(data, null, 2), 'utf8');
+            }
+        }
+    } catch (e) {
+        console.error('[CharacterIndex] Failed to modify index file:', e);
+    }
+}
+
+/**
+ * Synchronously adds or updates a character in the index file
+ * @param {import('../users.js').UserDirectoryList} directories
+ * @param {string} avatarUrl
+ */
+export async function addOrUpdateCharacterInIndex(directories, avatarUrl) {
+    if (!isCharacterIndexEnabled()) return;
+    try {
+        const char = await processCharacter(avatarUrl, directories, { shallow: true });
+        if (!char || !char.name) return;
+        
+        const avatarPath = path.join(directories.characters, String(avatarUrl));
+        const date_added = fs.existsSync(avatarPath) ? fs.statSync(avatarPath).mtimeMs : Date.now();
+        
+        const indexRecord = {
+            avatar: avatarUrl,
+            name: char.name,
+            creator: char.data?.creator ?? char.creator ?? '',
+            character_version: char.data?.character_version ?? char.character_version ?? '',
+            fav: !!(char.fav || char.data?.extensions?.fav),
+            date_added: date_added ? new Date(date_added).toISOString() : new Date(0).toISOString(),
+            date_last_chat: char.date_last_chat ? new Date(char.date_last_chat).toISOString() : new Date(0).toISOString(),
+        };
+
+        await modifyIndexFile(directories, (characters) => {
+            const idx = characters.findIndex(c => c.avatar === avatarUrl);
+            if (idx >= 0) characters[idx] = indexRecord;
+            else characters.push(indexRecord);
+            return true;
+        });
+    } catch (err) {
+        console.error('[CharacterIndex] addOrUpdate error:', err);
+    }
+}
+
+/**
+ * Splices a deleted character's avatar out of the index file array
+ * @param {import('../users.js').UserDirectoryList} directories
+ * @param {string} avatarUrl
+ */
+export async function removeCharacterFromIndex(directories, avatarUrl) {
+    if (!isCharacterIndexEnabled()) return;
+    await modifyIndexFile(directories, (characters) => {
+        const idx = characters.findIndex(c => c.avatar === avatarUrl);
+        if (idx >= 0) {
+            characters.splice(idx, 1);
+            return true;
+        }
+        return false;
+    });
+}
+
+/**
+ * Sets date_last_chat in the index file array when chat logs are saved
+ * @param {import('../users.js').UserDirectoryList} directories
+ * @param {string} avatarUrl
+ * @param {number|string} dateTimestamp
+ */
+export async function updateCharacterChatDateInIndex(directories, avatarUrl, dateTimestamp) {
+    if (!isCharacterIndexEnabled()) return;
+    await modifyIndexFile(directories, (characters) => {
+        const idx = characters.findIndex(c => c.avatar === avatarUrl);
+        if (idx >= 0) {
+            characters[idx].date_last_chat = new Date(dateTimestamp).toISOString();
+            return true;
+        }
+        return false;
+    });
+}

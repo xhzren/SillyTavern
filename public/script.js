@@ -1264,47 +1264,82 @@ export function getCharacterSource(chId = this_chid) {
 }
 
 export async function getCharacters() {
-    const response = await fetch('/api/characters/all', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({}),
-    });
-    if (response.ok) {
-        const previousAvatar = this_chid !== undefined ? characters[this_chid]?.avatar : null;
-        characters.splice(0, characters.length);
-        const getData = await response.json();
-        for (let i = 0; i < getData.length; i++) {
-            characters[i] = getData[i];
-            characters[i].name = DOMPurify.sanitize(characters[i].name);
+    const previousAvatar = this_chid !== undefined ? characters[this_chid]?.avatar : null;
+    let getData;
 
-            // For dropped-in cards
-            if (!characters[i].chat) {
-                characters[i].chat = `${characters[i].name} - ${humanizedDateTime()}`;
-            }
-
-            characters[i].chat = String(characters[i].chat);
-        }
-
-        if (previousAvatar) {
-            const newCharacterId = characters.findIndex(x => x.avatar === previousAvatar);
-            if (newCharacterId >= 0) {
-                setCharacterId(newCharacterId);
-                await selectCharacterById(newCharacterId, { switchMenu: false });
-            } else {
-                await Popup.show.text(t`ERROR: The active character is no longer available.`, t`The page will be refreshed to prevent data loss. Press "OK" to continue.`);
-                return location.reload();
-            }
-        }
-
-        await getGroups();
-        await printCharacters(true);
-    } else {
-        console.error('Failed to fetch characters:', response.statusText);
-        const errorData = await response.json();
-        if (errorData?.overflow) {
-            await Popup.show.text(t`Character data length limit reached`, t`To resolve this, set "performance.lazyLoadCharacters" to "true" in config.yaml and restart the server.`);
+    if (globalThis.characterIndexEnabled) {
+        const response = await fetch('/api/characters/index/data', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+        });
+        if (response.ok) {
+            getData = await response.json();
+            
+            // Hydrate them lightly to mimic standard characters
+            getData.forEach(entry => {
+                entry.name = DOMPurify.sanitize(entry.name ?? '');
+                entry.avatar = entry.avatar || `${entry.name}.png`;
+                entry.chat = `${entry.name} - ${humanizedDateTime()}`;
+                entry.chat_size = 0;
+                entry.data_size = 0;
+                entry.tags = [];
+                entry.shallow = true;
+                entry.data = {
+                    name: entry.name,
+                    creator: entry.creator ?? '',
+                    character_version: entry.character_version ?? '',
+                    creator_notes: '',
+                    tags: [],
+                    extensions: { fav: !!entry.fav },
+                };
+            });
         }
     }
+
+    if (!getData) {
+        const response = await fetch('/api/characters/all', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({}),
+        });
+        if (response.ok) {
+            getData = await response.json();
+        } else {
+            console.error('Failed to fetch characters:', response.statusText);
+            const errorData = await response.json();
+            if (errorData?.overflow) {
+                await Popup.show.text(t`Character data length limit reached`, t`To resolve this, set "performance.lazyLoadCharacters" to "true" in config.yaml and restart the server.`);
+            }
+            return;
+        }
+    }
+
+    characters.splice(0, characters.length);
+    for (let i = 0; i < getData.length; i++) {
+        characters[i] = getData[i];
+        characters[i].name = DOMPurify.sanitize(characters[i].name);
+
+        // For dropped-in cards
+        if (!characters[i].chat) {
+            characters[i].chat = `${characters[i].name} - ${humanizedDateTime()}`;
+        }
+
+        characters[i].chat = String(characters[i].chat);
+    }
+
+    if (previousAvatar) {
+        const newCharacterId = characters.findIndex(x => x.avatar === previousAvatar);
+        if (newCharacterId >= 0) {
+            setCharacterId(newCharacterId);
+            await selectCharacterById(newCharacterId, { switchMenu: false });
+        } else {
+            await Popup.show.text(t`ERROR: The active character is no longer available.`, t`The page will be refreshed to prevent data loss. Press "OK" to continue.`);
+            return location.reload();
+        }
+    }
+
+    await getGroups();
+    await printCharacters(true);
 }
 
 async function delChat(chatfile) {

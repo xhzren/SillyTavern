@@ -9,6 +9,7 @@ import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import _ from 'lodash';
 
 import validateAvatarUrlMiddleware from '../middleware/validateFileName.js';
+import { updateCharacterChatDateInIndex } from './characters-index.js';
 import {
     getConfigValue,
     humanizedDateTime,
@@ -476,6 +477,7 @@ router.post('/save', validateAvatarUrlMiddleware, async function (request, respo
 
         if (Array.isArray(chatData)) {
             await trySaveChat(chatData, chatFilePath, request.body.force, handle, cardName, request.user.directories.backups);
+            await updateCharacterChatDateInIndex(request.user.directories, request.body.avatar_url, Date.now());
             return response.send({ ok: true });
         } else {
             return response.status(400).send({ error: 'The request\'s body.chat is not an array.' });

@@ -48,6 +48,8 @@ async function initCharacterIndex({ characters, getRequestHeaders, humanizedDate
         const status = await statusRes.json();
         if (!status.enabled) return false;
 
+        globalThis.characterIndexEnabled = true;
+
         if (status.exists && status.count > 0) {
             console.log(`[CharacterIndex] Found index: ${status.count} chars (built: ${status.builtAt})`);
             return await loadCharacterIndexAll();

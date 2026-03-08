@@ -25,6 +25,7 @@ import { getChatInfo } from './chats.js';
 import { ByafParser } from '../byaf.js';
 import { CharXParser, persistCharXAssets } from '../charx.js';
 import cacheBuster from '../middleware/cacheBuster.js';
+import { addOrUpdateCharacterInIndex, removeCharacterFromIndex } from './characters-index.js';
 
 // With 100 MB limit it would take roughly 3000 characters to reach this limit
 const memoryCacheCapacity = getConfigValue('performance.memoryCacheCapacity', '100mb');
@@ -1027,12 +1028,14 @@ router.post('/create', getFileNameValidationFunction('file_name'), async functio
 
         if (!request.file) {
             await writeCharacterData(DEFAULT_AVATAR_PATH, char, internalName, request);
+            await addOrUpdateCharacterInIndex(request.user.directories, avatarName);
             return response.send(avatarName);
         } else {
             const crop = tryParse(request.query.crop);
             const uploadPath = path.join(request.file.destination, request.file.filename);
             await writeCharacterData(uploadPath, char, internalName, request, crop);
             fs.unlinkSync(uploadPath);
+            await addOrUpdateCharacterInIndex(request.user.directories, avatarName);
             return response.send(avatarName);
         }
     } catch (err) {
@@ -1078,6 +1081,8 @@ router.post('/rename', validateAvatarUrlMiddleware, async function (request, res
 
         // Remove the old character file
         fs.unlinkSync(oldAvatarPath);
+        await removeCharacterFromIndex(request.user.directories, oldAvatarName);
+        await addOrUpdateCharacterInIndex(request.user.directories, newAvatarName);
 
         // Return new avatar name to ST
         return response.send({ avatar: newAvatarName });
@@ -1122,6 +1127,7 @@ router.post('/edit', validateAvatarUrlMiddleware, async function (request, respo
             cacheBuster.bust(request, response);
         }
 
+        await addOrUpdateCharacterInIndex(request.user.directories, request.body.avatar_url);
         return response.sendStatus(200);
     } catch (err) {
         console.error('An error occurred, character edit invalidated.', err);
@@ -1163,6 +1169,7 @@ router.post('/edit-avatar', validateAvatarUrlMiddleware, async function (request
         cacheBuster.bust(request, response);
         invalidateThumbnail(request.user.directories, 'avatar', request.body.avatar_url);
 
+        await addOrUpdateCharacterInIndex(request.user.directories, request.body.avatar_url);
         return response.sendStatus(200);
     } catch (err) {
         console.error('An error occurred while editing avatar', err);
@@ -1214,6 +1221,7 @@ router.post('/edit-attribute', validateAvatarUrlMiddleware, async function (requ
         let newCharJSON = JSON.stringify(char);
         const targetFile = (request.body.avatar_url).replace('.png', '');
         await writeCharacterData(avatarPath, newCharJSON, targetFile, request);
+        await addOrUpdateCharacterInIndex(request.user.directories, request.body.avatar_url);
         return response.sendStatus(200);
     } catch (err) {
         console.error('An error occurred, character edit invalidated.', err);
@@ -1257,6 +1265,7 @@ router.post('/merge-attributes', getFileNameValidationFunction('avatar'), async 
         //Accept either V1 or V2.
         if (validator.validate()) {
             await writeCharacterData(avatarPath, JSON.stringify(character), targetImg, request);
+            await addOrUpdateCharacterInIndex(request.user.directories, update.avatar);
             response.sendStatus(200);
         } else {
             console.warn(validator.lastValidationError);
@@ -1300,6 +1309,7 @@ router.post('/delete', validateAvatarUrlMiddleware, async function (request, res
         }
     }
 
+    await removeCharacterFromIndex(request.user.directories, request.body.avatar_url);
     return response.sendStatus(200);
 });
 
@@ -1448,6 +1458,9 @@ router.post('/import', async function (request, response) {
         if (preservedFileName) {
             invalidateThumbnail(request.user.directories, 'avatar', `${preservedFileName}.png`);
         }
+
+        const avatarName = fileName.endsWith('.png') ? fileName : `${fileName}.png`;
+        await addOrUpdateCharacterInIndex(request.user.directories, avatarName);
 
         response.send({ file_name: fileName });
     } catch (err) {
