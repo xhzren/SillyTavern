@@ -27,8 +27,13 @@ import fs from 'node:fs';
 import { promises as fsPromises } from 'node:fs';
 
 import express from 'express';
+import sanitize from 'sanitize-filename';
+import yaml from 'yaml';
+import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import { getConfigValue } from '../util.js';
 import { processCharacter } from './characters.js';
+import { parse } from '../character-card-parser.js';
+import { CharXParser } from '../charx.js';
 
 export const router = express.Router();
 
@@ -272,6 +277,77 @@ router.post('/delete', async function (request, response) {
 });
 
 /**
+ * POST /api/characters/index/peek
+ *
+ * Accepts a character file upload (PNG, JSON, YAML, CharX) and returns its
+ * name and character_version WITHOUT importing/persisting anything.
+ *
+ * Used by the frontend to detect duplicates before applying an import strategy.
+ *
+ * Request: multipart/form-data with field `avatar` (file) and `file_type` (string)
+ * Response: { name: string, character_version: string } or { error: true }
+ */
+router.post('/peek', async function (request, response) {
+    if (!request.file) return response.status(400).json({ error: true, message: 'No file uploaded' });
+
+    const uploadPath = path.join(request.file.destination, request.file.filename);
+    const format = String(request.body?.file_type ?? '').toLowerCase();
+
+    /** Cleanup helper — always remove temp file */
+    const cleanup = () => {
+        try { if (fs.existsSync(uploadPath)) fs.unlinkSync(uploadPath); } catch { /* ignore */ }
+    };
+
+    try {
+        let name = '';
+        let character_version = '';
+
+        if (format === 'png') {
+            // Use PNG metadata parser
+            const rawJson = await parse(uploadPath, 'png').catch(() => null);
+            cleanup();
+            if (!rawJson) return response.status(400).json({ error: true, message: 'Could not parse PNG' });
+            const data = JSON.parse(rawJson);
+            name = data?.data?.name ?? data?.name ?? '';
+            character_version = data?.data?.character_version ?? data?.character_version ?? '';
+        } else if (format === 'charx') {
+            // CharX is a ZIP archive — use CharXParser to extract card.json
+            const data = (await fsPromises.readFile(uploadPath)).buffer;
+            cleanup();
+            const charxResult = await new CharXParser(data).parse();
+            name = charxResult.card?.data?.name ?? charxResult.card?.name ?? '';
+            character_version = charxResult.card?.data?.character_version ?? charxResult.card?.character_version ?? '';
+        } else if (format === 'json') {
+            const raw = await fsPromises.readFile(uploadPath, 'utf8');
+            cleanup();
+            const parsed = JSON.parse(raw);
+            name = parsed?.data?.name ?? parsed?.name ?? parsed?.ch_name ?? parsed?.char_name ?? '';
+            character_version = parsed?.data?.character_version ?? parsed?.character_version ?? '';
+        } else if (format === 'yaml' || format === 'yml') {
+            const raw = await fsPromises.readFile(uploadPath, 'utf8');
+            cleanup();
+            const parsed = yaml.parse(raw) ?? {};
+            name = parsed?.data?.name ?? parsed?.name ?? parsed?.ch_name ?? '';
+            character_version = parsed?.data?.character_version ?? parsed?.character_version ?? '';
+        } else {
+            cleanup();
+            return response.status(400).json({ error: true, message: `Unsupported format for peek: ${format}` });
+        }
+
+        name = sanitize(String(name)).trim();
+        character_version = String(character_version ?? '').trim();
+
+        console.log(`[CharacterIndex] Peek: name="${name}" version="${character_version}"`);
+        return response.json({ name, character_version });
+    } catch (err) {
+        cleanup();
+        console.error('[CharacterIndex] peek error:', err);
+        return response.status(500).json({ error: true, message: String(err) });
+    }
+});
+
+
+/**
  * POST /api/characters/index/favorites
  * Returns an array of all favorited characters from the index.
  */
@@ -292,24 +368,36 @@ router.post('/favorites', async function (request, response) {
     }
 });
 
+let indexWriteMutex = Promise.resolve();
+
 /**
- * Safely update the characters index file
+ * Safely update the characters index file, using a mutex to prevent concurrent read/writes.
  * @param {import('../users.js').UserDirectoryList} directories
  * @param {function(object[]): boolean} modifierFn Returns true if changes were made
  */
 async function modifyIndexFile(directories, modifierFn) {
     const indexPath = getIndexPath(directories);
     if (!fs.existsSync(indexPath)) return;
+
+    // Queue this operation behind any ongoing writes to prevent EPERM on Windows
+    /** @type {() => void} */
+    const unlock = await new Promise(resolveOuter => {
+        const next = indexWriteMutex.then(() => new Promise((resolveInner) => resolveOuter(() => resolveInner(undefined))));
+        indexWriteMutex = next.catch(() => {}); // Ensure errors don't stall the queue
+    });
+
     try {
         const raw = await fsPromises.readFile(indexPath, 'utf8');
         const data = JSON.parse(raw);
         if (Array.isArray(data.characters)) {
             if (modifierFn(data.characters)) {
-                await fsPromises.writeFile(indexPath, JSON.stringify(data, null, 2), 'utf8');
+                writeFileAtomicSync(indexPath, JSON.stringify(data, null, 2), 'utf8');
             }
         }
     } catch (e) {
         console.error('[CharacterIndex] Failed to modify index file:', e);
+    } finally {
+        unlock();
     }
 }
 

@@ -1045,12 +1045,17 @@ router.post('/create', getFileNameValidationFunction('file_name'), async functio
 });
 
 router.post('/rename', validateAvatarUrlMiddleware, async function (request, response) {
+    console.log('[RENAME] Started rename process for:', request.body.avatar_url, 'to:', request.body.new_name);
     if (!request.body.avatar_url || !request.body.new_name) {
+        console.log('[RENAME] Missing parameters, aborting.');
         return response.sendStatus(400);
     }
 
     const oldAvatarName = request.body.avatar_url;
-    const newName = sanitize(request.body.new_name);
+    
+    // First safely replace only known illegal Windows/Linux characters with '_'
+    // DO NOT use sanitize() from sanitize-filename as it completely strips CJK characters (like 秦璐) on some node environments.
+    const newName = String(request.body.new_name).replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
     const oldInternalName = path.parse(request.body.avatar_url).name;
     const newInternalName = getPngName(newName, request.user.directories);
     const newAvatarName = `${newInternalName}.png`;
@@ -1060,36 +1065,62 @@ router.post('/rename', validateAvatarUrlMiddleware, async function (request, res
     const oldChatsPath = path.join(request.user.directories.chats, oldInternalName);
     const newChatsPath = path.join(request.user.directories.chats, newInternalName);
 
+    console.log(`[RENAME] Paths calculated. Old: ${oldAvatarPath}, New Internal: ${newInternalName}`);
+
     try {
+        console.log('[RENAME] Reading old character data...');
         // Read old file, replace name int it
         const rawOldData = await readCharacterData(oldAvatarPath);
         if (rawOldData === undefined) throw new Error('Failed to read character file');
 
+        console.log('[RENAME] Modifying character data JSON...');
         const oldData = getCharaCardV2(JSON.parse(rawOldData), request.user.directories);
         _.set(oldData, 'data.name', newName);
         _.set(oldData, 'name', newName);
         const newData = JSON.stringify(oldData);
 
+        console.log('[RENAME] Writing new character file via writeCharacterData() ...');
         // Write data to new location
         await writeCharacterData(oldAvatarPath, newData, newInternalName, request);
 
+        console.log('[RENAME] Renaming chat directories...');
         // Rename chats folder
         if (fs.existsSync(oldChatsPath) && !fs.existsSync(newChatsPath)) {
-            fs.cpSync(oldChatsPath, newChatsPath, { recursive: true });
-            fs.rmSync(oldChatsPath, { recursive: true, force: true });
+            console.log(`[RENAME] Moving chats from ${oldChatsPath} to ${newChatsPath}`);
+            try {
+                // Use renameSync for atomic folder rename instead of cpSync+rmSync which can crash node on Windows
+                fs.renameSync(oldChatsPath, newChatsPath);
+            } catch (fsErr) {
+                console.error('[RENAME] Error moving chat directory! Some chats may not be carried over:', fsErr);
+            }
         }
 
-        // Remove the old character file
-        fs.unlinkSync(oldAvatarPath);
-        await removeCharacterFromIndex(request.user.directories, oldAvatarName);
-        await addOrUpdateCharacterInIndex(request.user.directories, newAvatarName);
+        console.log('[RENAME] Unlinking old character file...');
+        // Remove the old character file safely
+        try {
+            fs.unlinkSync(oldAvatarPath);
+        } catch (unlinkErr) {
+            console.error('[RENAME] Error unlinking old avatar file (may be locked, will be orphaned):', unlinkErr);
+        }
+        
+        console.log('[RENAME] Updating Character Index caches...');
+        try {
+            console.log('[RENAME] -> removeCharacterFromIndex');
+            await removeCharacterFromIndex(request.user.directories, oldAvatarName);
+            console.log('[RENAME] -> addOrUpdateCharacterInIndex');
+            await addOrUpdateCharacterInIndex(request.user.directories, newAvatarName);
+            console.log('[RENAME] -> Index updates complete.');
+        } catch (idxErr) {
+            console.error('[RENAME] [CharacterIndex] Failed to update index on rename:', idxErr);
+        }
 
+        console.log('[RENAME] Completed successfully. Sending response.');
         // Return new avatar name to ST
         return response.send({ avatar: newAvatarName });
     }
     catch (err) {
-        console.error(err);
-        return response.sendStatus(500);
+        console.error('[RENAME] FATAL ERROR during rename:', err, err.stack);
+        return response.status(500).send({ error: true, message: err.message, stack: err.stack });
     }
 });
 

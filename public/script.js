@@ -285,7 +285,7 @@ import { MacroEnvBuilder } from './scripts/macros/engine/MacroEnvBuilder.js';
 import { MacroEngine } from './scripts/macros/engine/MacroEngine.js';
 import { addChatBackupsBrowser } from './scripts/chat-backups.js';
 import { onboardingExperimentalMacroEngine } from './scripts/macros/engine/MacroDiagnostics.js';
-import { initCharacterIndex, loadCharacterIndexAll } from './scripts/characters-index.js';
+import { initCharacterIndex, loadCharacterIndexAll, openCharacterIndexSettings, handleImportDuplicate } from './scripts/characters-index.js';
 
 // API OBJECT FOR EXTERNAL WIRING
 globalThis.SillyTavern = {
@@ -7080,6 +7080,10 @@ export async function renameCharacter(name = null, { silent = false, renameChats
 
             // Unload current character
             setCharacterId(undefined);
+            
+            // Allow the backend index file a moment to finish its atomic write
+            await delay(100);
+            
             // Reload characters list
             await getCharacters();
 
@@ -10332,6 +10336,25 @@ async function importCharacter(file, { preserveFileName = '', importTags = false
         return;
     }
 
+    // Apply import duplicate strategy if index is enabled and no preserved name was pre-set
+    let _postImportRename = '';
+    if (globalThis.characterIndexEnabled && !preserveFileName) {
+        try {
+            const result = await handleImportDuplicate(file, characters, getRequestHeaders, deleteCharacter);
+            if (result) {
+                file = result.file;
+                if (result.options?.preserveFileName) {
+                    preserveFileName = result.options.preserveFileName;
+                }
+                if (result.postImportRename) {
+                    _postImportRename = result.postImportRename;
+                }
+            }
+        } catch (err) {
+            console.error('[CharacterIndex] handleImportDuplicate error, proceeding normally', err);
+        }
+    }
+
     const exists = preserveFileName ? characters.find(character => character.avatar === preserveFileName) : undefined;
 
     const format = ext[1].toLowerCase();
@@ -10366,6 +10389,29 @@ async function importCharacter(file, { preserveFileName = '', importTags = false
             // Refresh existing thumbnail
             if (exists && this_chid !== undefined) {
                 await fetch(getThumbnailUrl('avatar', avatarFileName), { cache: 'reload' });
+            }
+
+            // Post-import rename (append_version / append_number strategies)
+            if (_postImportRename) {
+                try {
+                    const renameRes = await fetch('/api/characters/rename', {
+                        method: 'POST',
+                        headers: getRequestHeaders(),
+                        body: JSON.stringify({ avatar_url: avatarFileName, new_name: _postImportRename }),
+                        cache: 'no-cache',
+                    });
+                    if (renameRes.ok) {
+                        const renameData = await renameRes.json();
+                        if (renameData.avatar) {
+                            avatarFileName = renameData.avatar;
+                            console.log(`[CharacterIndex] Renamed to "${_postImportRename}" → ${avatarFileName}`);
+                        }
+                    } else {
+                        console.warn(`[CharacterIndex] Rename failed: HTTP ${renameRes.status}`);
+                    }
+                } catch (err) {
+                    console.error('[CharacterIndex] Post-import rename error:', err);
+                }
             }
 
             $('#character_search_bar').val('').trigger('input');
@@ -10956,6 +11002,9 @@ jQuery(async function () {
     $('#rm_button_characters').on('click', function () {
         selected_button = 'characters';
         select_rm_characters();
+    });
+    $('#rm_button_characters_settings').on('click', function () {
+        openCharacterIndexSettings();
     });
     $('#rm_button_back').on('click', function () {
         selected_button = 'characters';

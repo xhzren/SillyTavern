@@ -211,6 +211,15 @@ export const extension_settings = {
         /** @type {string} */
         sort: 'dateAsc',
     },
+    /** Character index cache settings */
+    characterIndex: {
+        /** @type {boolean} Whether to rebuild the index every time ST starts */
+        rebuildOnStartup: false,
+        /** @type {string} Strategy when a duplicate character is imported: 'overwrite'|'append_version'|'append_number'|'delete_update' */
+        importDuplicateStrategy: 'overwrite',
+        /** @type {boolean} Enable verbose debug logging & toast notifications */
+        debug: false,
+    },
 };
 
 function showHideExtensionsMenu() {

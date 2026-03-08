@@ -1,0 +1,174 @@
+<div class="characterIndexSettings wide100p flex-container flexFlowColumn flexGap10">
+
+    <!-- ─── Index Actions ─────────────────────────────────────── -->
+    <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+            <b data-i18n="Index Actions">索引操作</b>
+            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+        <div class="inline-drawer-content">
+            <div class="flex-container flexFlowColumn flexGap5">
+                <!-- Rebuild button -->
+                <div class="flex-container alignItemsCenter justifySpaceBetween">
+                    <label data-i18n="Manually Rebuild Index Cache">手动重建索引缓存</label>
+                    <button id="ci_action_rebuild" class="menu_button menu_button_icon"
+                        title="强制清理并重新扫描所有角色文件重建缓存"
+                        data-i18n="[title]Force clean and rescan all character files to rebuild the cache">
+                        <i class="fa-solid fa-rotate-right"></i>
+                        <span data-i18n="Rebuild">重建缓存</span>
+                    </button>
+                </div>
+                <!-- Status line -->
+                <small id="ci_index_status" class="opacity50p"></small>
+            </div>
+        </div>
+    </div>
+
+    <!-- ─── General Settings ──────────────────────────────────── -->
+    <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+            <b data-i18n="General Settings">通用设置</b>
+            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+        <div class="inline-drawer-content">
+            <div class="flex-container flexFlowColumn flexGap5">
+                <!-- Rebuild on startup -->
+                <label class="checkbox_label flexGap5" for="ci_rebuild_startup">
+                    <input type="checkbox" id="ci_rebuild_startup">
+                    <span data-i18n="Rebuild index on every startup">每次启动都重新构建索引</span>
+                </label>
+                <!-- Debug mode -->
+                <label class="checkbox_label flexGap5" for="ci_debug_mode">
+                    <input type="checkbox" id="ci_debug_mode">
+                    <span data-i18n="Enable debug mode (verbose logging)">开启 Debug 模式（详细日志 &amp; 提示）</span>
+                </label>
+            </div>
+        </div>
+    </div>
+
+    <!-- ─── Import Duplicate Strategy ────────────────────────── -->
+    <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+            <b data-i18n="Import Duplicate Strategy">导入角色重复策略</b>
+            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+        <div class="inline-drawer-content">
+            <div class="flex-container flexFlowColumn flexGap5" style="margin-top:4px">
+
+                <!-- OVERWRITE -->
+                <label class="ci-strategy-card" for="ci_strategy_overwrite">
+                    <input type="radio" id="ci_strategy_overwrite" name="ci_import_strategy" value="overwrite">
+                    <div class="ci-strategy-body">
+                        <div class="ci-strategy-header">
+                            <i class="fa-solid fa-file-pen ci-strategy-icon"></i>
+                            <span class="ci-strategy-title" data-i18n="Overwrite">覆盖更新</span>
+                        </div>
+                        <small class="ci-strategy-desc opacity50p" data-i18n="Replace the existing card directly. World book will be deleted first.">
+                            直接替换现有文件，关联世界书会先删除
+                        </small>
+                    </div>
+                </label>
+
+                <!-- APPEND VERSION -->
+                <label class="ci-strategy-card" for="ci_strategy_append_version">
+                    <input type="radio" id="ci_strategy_append_version" name="ci_import_strategy" value="append_version">
+                    <div class="ci-strategy-body">
+                        <div class="ci-strategy-header">
+                            <i class="fa-solid fa-tag ci-strategy-icon"></i>
+                            <span class="ci-strategy-title" data-i18n="Append version number">追加版本号</span>
+                        </div>
+                        <small class="ci-strategy-desc opacity50p" data-i18n="Uses character_version field; falls back to number suffix if empty. e.g. Name_v2 / Name_1">
+                            读取 character_version 字段追加，无版本号时改为追加编号。例: Name_v2 / Name_1
+                        </small>
+                    </div>
+                </label>
+
+                <!-- DELETE & UPDATE -->
+                <label class="ci-strategy-card" for="ci_strategy_delete_update">
+                    <input type="radio" id="ci_strategy_delete_update" name="ci_import_strategy" value="delete_update">
+                    <div class="ci-strategy-body">
+                        <div class="ci-strategy-header">
+                            <i class="fa-solid fa-arrows-rotate ci-strategy-icon"></i>
+                            <span class="ci-strategy-title" data-i18n="Delete and update">删除并更新</span>
+                        </div>
+                        <small class="ci-strategy-desc opacity50p" data-i18n="Delete old card and world book first, then import fresh copy.">
+                            先删除旧版本及其世界书，再重新导入新文件
+                        </small>
+                    </div>
+                </label>
+
+            </div>
+
+            <!-- Strategy card inline styles (scoped) -->
+            <style>
+                .ci-strategy-card {
+                    display: flex;
+                    align-items: flex-start;
+                    gap: 10px;
+                    padding: 8px 10px;
+                    border-radius: 6px;
+                    border: 1px solid transparent;
+                    cursor: pointer;
+                    transition: background 0.15s, border-color 0.15s;
+                }
+                .ci-strategy-card:hover {
+                    background: rgba(255,255,255,0.05);
+                }
+                .ci-strategy-card input[type="radio"] {
+                    margin-top: 3px;
+                    flex-shrink: 0;
+                }
+                .ci-strategy-card:has(input:checked) {
+                    background: rgba(var(--SmartThemeBodyColor-rgb, 255,255,255), 0.07);
+                    border-color: var(--SmartThemeQuoteColor, #888);
+                }
+                .ci-strategy-body {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 2px;
+                    flex: 1;
+                }
+                .ci-strategy-header {
+                    display: flex;
+                    align-items: center;
+                    gap: 6px;
+                }
+                .ci-strategy-icon {
+                    font-size: 0.85em;
+                    opacity: 0.7;
+                    width: 14px;
+                    text-align: center;
+                }
+                .ci-strategy-title {
+                    font-weight: 600;
+                    font-size: 0.95em;
+                }
+                .ci-strategy-desc {
+                    font-size: 0.82em;
+                    line-height: 1.4;
+                    display: block;
+                    padding-left: 20px;
+                }
+            </style>
+        </div>
+    </div>
+
+    <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+            <b><span data-i18n="Duplicate Character Cleanup">重复角色卡清理</span></b>
+            <div class="inline-drawer-icon fa-solid fa-chevron-down down"></div>
+        </div>
+        <div class="inline-drawer-content" style="display: none;">
+            <div style="margin-top:10px; display:flex; flex-direction:column; gap:8px;">
+                <p style="margin:0; font-size:0.9em; opacity:0.8;">扫描整个索引库中的重复角色卡（名字相同，或带有不同版本号/编号后缀的变体），并进行批量清理。</p>
+                <div class="flex-container alignitemscenter flexwrap">
+                    <button class="menu_button menu_button_icon" id="ci_scan_duplicates_btn">
+                        <i class="fa-solid fa-broom"></i>
+                        <span data-i18n="Scan Duplicate Characters" class="align-middle">扫描重复角色卡</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</div>
