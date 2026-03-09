@@ -31,8 +31,8 @@ import sanitize from 'sanitize-filename';
 import yaml from 'yaml';
 import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import { getConfigValue } from '../util.js';
-import { processCharacter, clearMemoryCache, flushDiskCacheMemory } from './characters.js';
-import { parse } from '../character-card-parser.js';
+import { processCharacter, clearMemoryCache } from './characters.js';
+import { read, parse } from '../character-card-parser.js';
 import { CharXParser } from '../charx.js';
 
 export const router = express.Router();
@@ -126,7 +126,6 @@ router.post('/status', async function (request, response) {
  * Returns { success, count }.
  */
 router.post('/build', async function (request, response) {
-    const LOG_INTERVAL = 50;
     /** @type {fs.WriteStream|null} */
     let stream = null;
     try {
@@ -137,61 +136,83 @@ router.post('/build', async function (request, response) {
 
         console.log(`[CharacterIndex] Building index for ${total} character(s)…`);
 
-        // Clear memory cache + release node-persist in-memory dictionary before starting
-        await flushDiskCacheMemory();
+        // Free memory cache before starting
         clearMemoryCache();
 
         const indexPath = getIndexPath(dirs);
-        // Write index file incrementally using a stream to avoid holding all records in memory
         stream = fs.createWriteStream(indexPath, { encoding: 'utf8' });
-
-        // Write JSON header
-        const header = JSON.stringify({ version: INDEX_VERSION, built_at: new Date().toISOString(), count: total });
-        // We'll patch the count at the end; for now write the opening of the characters array
         stream.write('{"version":' + INDEX_VERSION + ',"built_at":"' + new Date().toISOString() + '","characters":[');
 
         let count = 0;
         let firstRecord = true;
 
-        // Process ONE file at a time sequentially — avoids PNG buffer pile-up in the event loop
         for (let i = 0; i < pngFiles.length; i++) {
             const file = pngFiles[i];
             try {
-                // skipCache: true — don't let readCharacterData touch memoryCache or diskCache
-                const char = await processCharacter(file, dirs, { shallow: true, skipCache: true });
-                if (!char || !char.name) continue;
+                // --- MINIMAL DIRECT PARSER ---
+                // Read the PNG and extract the character JSON in-place.
+                // We do NOT call processCharacter to avoid lodash, calculateChatSize,
+                // calculateDataSize, and other heavy allocations that retain memory.
+                /** @type {Buffer | null} */
+                let buffer = fs.readFileSync(path.join(dirs.characters, file));
+                /** @type {string | null} */
+                let rawJson = null;
+                try {
+                    rawJson = read(buffer);
+                } catch {
+                    buffer = null;
+                    continue; // skip non-character PNGs
+                }
+                buffer = null; // allow GC of the raw PNG buffer immediately
+
+                // parse() returns the character JSON as a string; parse it minimally
+                /** @type {{name?: string, data?: {name?: string, creator?: string, character_version?: string, extensions?: {fav?: boolean}}, fav?: boolean} | null} */
+                let card = null;
+                try {
+                    card = JSON.parse(/** @type {any} */ (rawJson));
+                } catch {
+                    rawJson = null;
+                    continue;
+                }
+                rawJson = null; // allow GC of the large JSON string immediately
+
+                const name = /** @type {string} */ (card?.data?.name ?? card?.name ?? '');
+                if (!name) { card = null; continue; }
+
+                const creator = card?.data?.creator ?? '';
+                const character_version = card?.data?.character_version ?? '';
+                const fav = !!(card?.fav || card?.data?.extensions?.fav);
+                card = null; // allow GC of the full card object immediately
 
                 const stat = fs.statSync(path.join(dirs.characters, file));
-                const date_added = stat.mtimeMs;
 
-                /** @type {object} */
                 const record = {
-                    avatar: char.avatar,
-                    name: char.data?.name ?? char.name ?? '',
-                    creator: char.data?.creator ?? '',
-                    character_version: char.data?.character_version ?? '',
-                    fav: !!(char.fav || char.data?.extensions?.fav),
-                    date_added: date_added ? new Date(date_added).toISOString() : new Date(0).toISOString(),
-                    date_last_chat: char.date_last_chat ? new Date(char.date_last_chat).toISOString() : new Date(0).toISOString(),
+                    avatar: file,
+                    name,
+                    creator,
+                    character_version,
+                    fav,
+                    date_added: new Date(stat.mtimeMs).toISOString(),
+                    date_last_chat: new Date(0).toISOString(),
                 };
 
-                // Write record directly to stream — never accumulate into an array
                 if (!firstRecord) stream.write(',');
                 stream.write(JSON.stringify(record));
                 firstRecord = false;
                 count++;
             } catch (err) {
-                console.warn(`[CharacterIndex] Skipping ${file}:`, err.message);
+                console.warn(`[CharacterIndex] Skipping ${file}:`, String(err.message));
             }
 
-            if ((i + 1) % LOG_INTERVAL === 0 || i + 1 === total) {
+            if ((i + 1) % 50 === 0 || i + 1 === total) {
                 console.log(`[CharacterIndex] Processed ${i + 1}/${total}`);
-                // Yield to the event loop so GC can run between batches
-                await new Promise(r => setImmediate(r));
             }
+
+            // Yield to the event loop on EVERY character so V8 GC can collect
+            // the PNG buffer before we allocate the next one.
+            await new Promise(r => setImmediate(r));
         }
 
-        // Close the JSON structure and finish the stream
         stream.write('],"count":' + count + '}');
         await new Promise((resolve, reject) => {
             if (stream) stream.end(err => err ? reject(err) : resolve(undefined));
@@ -206,6 +227,8 @@ router.post('/build', async function (request, response) {
         return response.status(500).json({ error: true, message: String(err) });
     }
 });
+
+
 
 
 /**

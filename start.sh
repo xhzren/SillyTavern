@@ -13,4 +13,5 @@ export NODE_ENV=production
 npm i --no-save --no-audit --no-fund --loglevel=error --no-progress --omit=dev
 
 echo "Entering SillyTavern..."
-node --max-old-space-size=1536 "server.js" "$@"
+export NODE_OPTIONS="--max-old-space-size=1536"
+node "server.js" "$@"
