@@ -31,7 +31,7 @@ import sanitize from 'sanitize-filename';
 import yaml from 'yaml';
 import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import { getConfigValue } from '../util.js';
-import { processCharacter, clearMemoryCache } from './characters.js';
+import { processCharacter, clearMemoryCache, flushDiskCacheMemory } from './characters.js';
 import { parse } from '../character-card-parser.js';
 import { CharXParser } from '../charx.js';
 
@@ -137,7 +137,8 @@ router.post('/build', async function (request, response) {
 
         console.log(`[CharacterIndex] Building index for ${total} character(s)…`);
 
-        // Clear memory cache before starting to free up space
+        // Clear memory cache + release node-persist in-memory dictionary before starting
+        await flushDiskCacheMemory();
         clearMemoryCache();
 
         const indexPath = getIndexPath(dirs);

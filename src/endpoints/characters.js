@@ -1595,3 +1595,27 @@ router.post('/export', validateAvatarUrlMiddleware, async function (request, res
 export function clearMemoryCache() {
     memoryCache.clear();
 }
+
+/**
+ * Clears node-persist's in-memory item cache without deleting disk files.
+ * Call before starting a bulk index build to free potentially hundreds of MB
+ * that node-persist pre-loaded from disk on startup.
+ * @returns {Promise<void>}
+ */
+export async function flushDiskCacheMemory() {
+    if (!useDiskCache) return;
+    try {
+        const cache = await diskCache.instance();
+        // node-persist keeps all items in its internal `_store` Map after init.
+        // Calling clearAll() removes both in-memory AND disk files – too destructive.
+        // Instead, we reinitialize with an empty store by calling the undocumented
+        // internal reset, or we simply clear and re-use disk files on next access.
+        // Safest approach: just drop the memoryCache and rely on disk-only on next read.
+        memoryCache.clear();
+        // For node-persist: iterate keys and call removeItem only from in-memory
+        // (there's no "memory-only evict" API, so we dispose and allow lazy reload instead)
+        diskCache.dispose();
+    } catch (err) {
+        console.warn('[DiskCache] Failed to flush in-memory store:', err);
+    }
+}
