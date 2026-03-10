@@ -210,7 +210,7 @@ export async function openCharacterIndexSettings() {
                 dbgLog('Build succeeded', result);
                 $status.text(`索引重建完成: 共 ${result.count} 张角色卡`);
 
-                await getCharacters();
+                await loadCharacterIndexAll();
             }
         } catch (err) {
             toastr.error('索引重建时发生异常。', '角色索引');

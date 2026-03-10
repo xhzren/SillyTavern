@@ -957,7 +957,7 @@ export function initRossMods() {
 
     function isInputElementInFocus() {
         //return $(document.activeElement).is(":input");
-        var focused = $(':focus');
+        var focused = $(document.activeElement);
         if (focused.is('input') || focused.is('textarea') || focused.prop('contenteditable') == 'true') {
             if (focused.attr('id') === 'send_textarea') {
                 return false;

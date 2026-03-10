@@ -383,6 +383,33 @@ export let name2 = systemUserName;
 export let chat = [];
 
 /**
+ * Cache for rendered HTML strings, keyed by message object reference.
+ * Using a Map (not WeakMap) so we can call .clear() on global settings changes.
+ * Entries are auto-removed when clearChat() is called.
+ * @type {Map<ChatMessage, string>}
+ */
+const messageHtmlCache = new Map();
+
+/**
+ * Clears the entire HTML render cache.
+ * Should be called when global rendering settings change (Regex rules, Markdown options, etc.).
+ */
+export function clearAllMessageHtmlCache() {
+    messageHtmlCache.clear();
+    console.debug('[HTML Cache] All entries cleared');
+}
+
+/**
+ * Removes the cached HTML for a single message, forcing it to be re-rendered next time.
+ * @param {ChatMessage} message The message object whose cache entry to remove.
+ */
+export function invalidateMessageHtmlCache(message) {
+    if (message && messageHtmlCache.delete(message)) {
+        console.debug('[HTML Cache] Entry invalidated');
+    }
+}
+
+/**
  * @type {import('./scripts/constants.js').SWIPE_STATE}
  */
 export let swipeState = SWIPE_STATE.NONE;
@@ -751,6 +778,14 @@ async function firstLoadInit() {
     await eventSource.emit(event_types.APP_INITIALIZED);
     await hideLoader();
     await fixViewport();
+
+    // Invalidate single-message HTML cache when a message is edited
+    eventSource.on(event_types.MESSAGE_EDITED, (mesId) => {
+        if (typeof mesId === 'number' && chat[mesId]) {
+            invalidateMessageHtmlCache(chat[mesId]);
+        }
+    });
+
     await eventSource.emit(event_types.APP_READY);
 }
 
@@ -1593,6 +1628,7 @@ export function cancelDebouncedChatSave() {
  * @param {boolean} [options.clearData=false] Optionally clear the chat array's contents.
  */
 export async function clearChat({ clearData = false } = {}) {
+    messageHtmlCache.clear();
     cancelDebouncedChatSave();
     cancelDebouncedMetadataSave();
     closeMessageEditor();
@@ -2482,7 +2518,17 @@ function getMessageTextHTML(message, { messageId = chat.indexOf(message) }) {
     /** @type {Partial<DOMPurify.Config>} */
     const sanitizerOverrides = message.extra?.uses_system_ui ? { MESSAGE_ALLOW_SYSTEM_UI: true } : {};
 
-    return messageFormatting(
+    // Message 0 uses substituteParams (dynamic macros like {{char}}), so we never cache it.
+    // Also skip caching system UI messages since they may rely on special sanitizer state.
+    const isCacheable = messageId !== 0 && !message.extra?.uses_system_ui;
+
+    if (isCacheable && messageHtmlCache.has(message)) {
+        console.log(`[HTML Cache] HIT  mesId=${messageId} name="${message.name}" cacheSize=${messageHtmlCache.size}`);
+        return messageHtmlCache.get(message);
+    }
+
+    const t0 = performance.now();
+    const html = messageFormatting(
         message.extra?.display_text || message.mes,
         message.name,
         message.is_system,
@@ -2491,6 +2537,16 @@ function getMessageTextHTML(message, { messageId = chat.indexOf(message) }) {
         sanitizerOverrides,
         false,
     );
+    const elapsed = (performance.now() - t0).toFixed(2);
+
+    if (isCacheable) {
+        messageHtmlCache.set(message, html);
+        console.log(`[HTML Cache] MISS  mesId=${messageId} name="${message.name}" renderTime=${elapsed}ms cacheSize=${messageHtmlCache.size}`);
+    } else {
+        console.log(`[HTML Cache] SKIP  mesId=${messageId} name="${message.name}" renderTime=${elapsed}ms (not cached)`);
+    }
+
+    return html;
 }
 
 /**
@@ -4389,6 +4445,30 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     let coreChat = chat.filter(x => !x.is_system || (canUseTools && Array.isArray(x.extra?.tool_invocations)));
     if (type === 'swipe') {
         coreChat.pop();
+    }
+
+    // OPTIMIZATION: Truncate coreChat early to prevent O(N) regex evaluation on thousands of unused messages
+    const contextLimit = getMaxContextSize() * 1.5 + 4000;
+    const wiDepthLimit = (typeof window.world_info_depth !== 'undefined' && window.world_info_depth > 0) ? window.world_info_depth : 1000;
+    
+    let requiredMessagesCount = 0;
+    let accumulatedTokens = 0;
+    
+    for (let i = coreChat.length - 1; i >= 0; i--) {
+        requiredMessagesCount++;
+        accumulatedTokens += (coreChat[i]?.extra?.token_count || 0);
+        
+        if (accumulatedTokens >= contextLimit && requiredMessagesCount >= wiDepthLimit) {
+            break;
+        }
+    }
+    
+    // Safety check - always process at least 1 message
+    requiredMessagesCount = Math.max(1, requiredMessagesCount);
+    
+    // Truncate coreChat from the start to avoid processing thousands of unused messages
+    if (requiredMessagesCount < coreChat.length) {
+        coreChat = coreChat.slice(coreChat.length - requiredMessagesCount);
     }
 
     coreChat = await Promise.all(coreChat.map(async (/** @type {ChatMessage} */ chatItem, index) => {
@@ -6523,12 +6603,16 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
                 const tokenCountText = (reasoning || '') + lastMessage.mes;
                 lastMessage.extra.token_count = await getTokenCountAsync(tokenCountText, 0);
             }
+            // Swipe changed the message content — invalidate its HTML cache
+            invalidateMessageHtmlCache(lastMessage);
             const chat_id = (chat.length - 1);
             !fromStreaming && await eventSource.emit(event_types.MESSAGE_RECEIVED, chat_id, type);
             addOneMessage(chat[chat_id], { type: 'swipe' });
             !fromStreaming && await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, chat_id, type);
         } else {
             lastMessage.mes = getMessage;
+            // Partial swipe update — invalidate cache too
+            invalidateMessageHtmlCache(lastMessage);
         }
     } else if (type === 'append' || type === 'continue') {
         console.debug('Trying to append.');
@@ -7936,6 +8020,9 @@ export async function saveSettings(loopCounter = 0) {
 
         settings = payload;
         await eventSource.emit(event_types.SETTINGS_UPDATED);
+        // Settings may include Regex rules or Markdown options that affect rendering.
+        // Clear the HTML cache so messages are re-rendered with the new settings.
+        clearAllMessageHtmlCache();
     } catch (error) {
         console.error('Error saving settings:', error);
         toastr.error(t`Check the server connection and reload the page to prevent data loss.`, t`Settings could not be saved`);
@@ -10949,7 +11036,8 @@ jQuery(async function () {
         }
     });
     $(document).on('click', event => {
-        if ($(':focus').attr('id') !== 'send_textarea') {
+        const activeId = document.activeElement ? document.activeElement.id : null;
+        if (activeId !== 'send_textarea') {
             var validIDs = ['options_button', 'send_but', 'mes_impersonate', 'mes_continue', 'send_textarea', 'option_regenerate', 'option_continue'];
             if (!validIDs.includes($(event.target).attr('id'))) {
                 S_TAPreviouslyFocused = false;
