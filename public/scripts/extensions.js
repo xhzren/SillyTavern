@@ -126,7 +126,29 @@ export function renderExtensionTemplateAsync(extensionName, templateId, template
     return renderTemplateAsync(`scripts/extensions/${extensionName}/${templateId}.html`, templateData, sanitize, localize, true);
 }
 
-export const extension_settings = {
+/**
+ * Keys that are extension metadata and stay in settings.json (not split into separate files).
+ * @type {Set<string>}
+ */
+const EXTENSION_SETTINGS_METADATA_KEYS = new Set([
+    'apiUrl',
+    'apiKey',
+    'autoConnect',
+    'notifyUpdates',
+    'disabledExtensions',
+]);
+
+/**
+ * Set of extension keys whose data has been modified since last save.
+ * @type {Set<string>}
+ */
+const _dirty_extension_keys = new Set();
+
+/**
+ * Internal data store for extension settings.
+ * @type {object}
+ */
+const _extension_settings_data = {
     apiUrl: defaultUrl,
     apiKey: '',
     autoConnect: false,
@@ -221,6 +243,115 @@ export const extension_settings = {
         debug: false,
     },
 };
+
+const proxyCache = new WeakMap();
+
+/**
+ * Creates a deep Proxy that tracks mutations and marks the root extension key as dirty.
+ * @param {object} target - The object to wrap
+ * @param {string|null} rootKey - The top-level key in extension_settings this object belongs to (null if this is the root object itself)
+ * @returns {Proxy} The wrapped object
+ */
+function createDeepProxy(target, rootKey = null) {
+    if (typeof target !== 'object' || target === null) {
+        return target;
+    }
+
+    // Reuse existing proxy for this object to maintain object identity (===)
+    if (proxyCache.has(target)) {
+        return proxyCache.get(target);
+    }
+
+    const proxy = new Proxy(target, {
+        get(obj, prop) {
+            const value = obj[prop];
+            // Only proxy objects/arrays, and avoid proxying DOM nodes or special objects if any sneak in
+            if (typeof value === 'object' && value !== null && !(value instanceof Node)) {
+                // Determine the root key. If we are at the root object, the prop being accessed is the root key.
+                const currentRootKey = rootKey === null ? prop : rootKey;
+                return createDeepProxy(value, currentRootKey);
+            }
+            return value;
+        },
+        set(obj, prop, value) {
+            obj[prop] = value;
+            const currentRootKey = rootKey === null ? prop : rootKey;
+            
+            if (typeof currentRootKey === 'string' && !EXTENSION_SETTINGS_METADATA_KEYS.has(currentRootKey)) {
+                _dirty_extension_keys.add(currentRootKey);
+            }
+            return true;
+        },
+        deleteProperty(obj, prop) {
+            delete obj[prop];
+            const currentRootKey = rootKey === null ? prop : rootKey;
+            
+            if (typeof currentRootKey === 'string' && !EXTENSION_SETTINGS_METADATA_KEYS.has(currentRootKey)) {
+                _dirty_extension_keys.add(currentRootKey);
+            }
+            return true;
+        },
+    });
+
+    proxyCache.set(target, proxy);
+    return proxy;
+}
+
+/**
+ * Proxy-wrapped extension_settings object.
+ * All reads/writes go through this deep Proxy, which tracks dirty keys for per-extension saving.
+ * Third-party extensions use this transparently — no code changes needed on their side.
+ */
+export const extension_settings = createDeepProxy(_extension_settings_data);
+
+/**
+ * Returns an object containing only the metadata keys from extension_settings.
+ * This is used by saveSettings() to avoid including extension data in the main settings.json payload.
+ * @returns {object} Metadata-only subset of extension_settings
+ */
+export function getExtensionSettingsMetadata() {
+    const metadata = {};
+    for (const key of EXTENSION_SETTINGS_METADATA_KEYS) {
+        if (key in _extension_settings_data) {
+            metadata[key] = _extension_settings_data[key];
+        }
+    }
+    return metadata;
+}
+
+/**
+ * Saves dirty extension data to separate per-extension files on the server.
+ * Called by saveSettings() after saving the main settings.json.
+ * @returns {Promise<void>}
+ */
+export async function saveExtensionSettings() {
+    if (_dirty_extension_keys.size === 0) {
+        return;
+    }
+
+    const keysToSave = [..._dirty_extension_keys];
+    _dirty_extension_keys.clear();
+
+    const promises = keysToSave.map(async (key) => {
+        try {
+            const response = await fetch('/api/settings/extension-settings', {
+                method: 'POST',
+                headers: getRequestHeaders(),
+                body: JSON.stringify({ key, data: _extension_settings_data[key] }),
+            });
+            if (!response.ok) {
+                console.error(`Failed to save extension settings for "${key}":`, response.statusText);
+                // Re-mark as dirty so it gets retried on next save
+                _dirty_extension_keys.add(key);
+            }
+        } catch (err) {
+            console.error(`Error saving extension settings for "${key}":`, err);
+            _dirty_extension_keys.add(key);
+        }
+    });
+
+    await Promise.allSettled(promises);
+}
 
 function showHideExtensionsMenu() {
     // Get the number of menu items that are not hidden
@@ -1449,9 +1580,28 @@ export async function installExtension(url, global, branch = '') {
  * @param {boolean} enableAutoUpdate Enable auto-update
  */
 export async function loadExtensionSettings(settings, versionChanged, enableAutoUpdate) {
+    // Load metadata from settings.json (apiUrl, apiKey, disabledExtensions, etc.)
     if (settings.extension_settings) {
         Object.assign(extension_settings, settings.extension_settings);
     }
+
+    // Load per-extension data from separate files
+    try {
+        const response = await fetch('/api/settings/extension-settings', {
+            method: 'GET',
+            headers: getRequestHeaders(),
+        });
+        if (response.ok) {
+            const extensionData = await response.json();
+            // Merge per-extension data into extension_settings (overrides any stale data from settings.json)
+            Object.assign(_extension_settings_data, extensionData);
+        }
+    } catch (err) {
+        console.error('Failed to load per-extension settings:', err);
+    }
+
+    // Clear dirty flags since we just loaded fresh data
+    _dirty_extension_keys.clear();
 
     $('#extensions_url').val(extension_settings.apiUrl);
     $('#extensions_api_key').val(extension_settings.apiKey);

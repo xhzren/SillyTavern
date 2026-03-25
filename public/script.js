@@ -187,7 +187,7 @@ import {
 } from './scripts/utils.js';
 import { debounce_timeout, GENERATION_TYPE_TRIGGERS, IGNORE_SYMBOL, inject_ids, MEDIA_DISPLAY, MEDIA_SOURCE, MEDIA_TYPE, OVERSWIPE_BEHAVIOR, SCROLL_BEHAVIOR, SWIPE_DIRECTION, SWIPE_SOURCE, SWIPE_STATE } from './scripts/constants.js';
 
-import { cancelDebouncedMetadataSave, doDailyExtensionUpdatesCheck, extension_settings, initExtensions, loadExtensionSettings, runGenerationInterceptors } from './scripts/extensions.js';
+import { cancelDebouncedMetadataSave, doDailyExtensionUpdatesCheck, extension_settings, getExtensionSettingsMetadata, initExtensions, loadExtensionSettings, runGenerationInterceptors, saveExtensionSettings } from './scripts/extensions.js';
 import { COMMENT_NAME_DEFAULT, CONNECT_API_MAP, executeSlashCommandsOnChatInput, initDefaultSlashCommands, initSlashCommandAutoComplete, isExecutingCommandsFromChatInput, pauseScriptExecution, stopScriptExecution, UNIQUE_APIS } from './scripts/slash-commands.js';
 import { initMacroAutoComplete } from './scripts/autocomplete/MacroAutoComplete.js';
 import {
@@ -7995,7 +7995,7 @@ export async function saveSettings(loopCounter = 0) {
         swipes: swipes,
         horde_settings: horde_settings,
         power_user: power_user,
-        extension_settings: extension_settings,
+        extension_settings: getExtensionSettingsMetadata(),
         tags: tags,
         tag_map: tag_map,
         nai_settings: nai_settings,
@@ -8017,6 +8017,9 @@ export async function saveSettings(loopCounter = 0) {
         if (!result.ok) {
             throw new Error(`Failed to save settings: ${result.statusText}`);
         }
+
+        // Save dirty extension data to separate per-extension files
+        await saveExtensionSettings();
 
         settings = payload;
         await eventSource.emit(event_types.SETTINGS_UPDATED);

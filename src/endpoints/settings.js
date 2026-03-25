@@ -211,8 +211,157 @@ router.post('/save', function (request, response) {
     }
 });
 
+/**
+ * Keys in extension_settings that are metadata and should remain in settings.json.
+ * All other keys are considered extension data and will be split into separate files.
+ */
+const EXTENSION_SETTINGS_METADATA_KEYS = new Set([
+    'apiUrl',
+    'apiKey',
+    'autoConnect',
+    'notifyUpdates',
+    'disabledExtensions',
+]);
+
+/**
+ * Migrates extension_settings data from settings.json into per-extension files.
+ * Only runs once; subsequent loads will skip if extension_data directory contains files.
+ * @param {object} directories User directories
+ * @returns {boolean} Whether migration was performed
+ */
+function migrateExtensionSettings(directories) {
+    const pathToSettings = path.join(directories.root, SETTINGS_FILE);
+    if (!fs.existsSync(pathToSettings)) {
+        return false;
+    }
+
+    let settings;
+    try {
+        settings = JSON.parse(fs.readFileSync(pathToSettings, 'utf8'));
+    } catch {
+        return false;
+    }
+
+    const extensionSettings = settings?.extension_settings;
+    if (!extensionSettings || typeof extensionSettings !== 'object') {
+        return false;
+    }
+
+    // Check if there are any non-metadata keys to migrate
+    const keysToMigrate = Object.keys(extensionSettings).filter(k => !EXTENSION_SETTINGS_METADATA_KEYS.has(k));
+    if (keysToMigrate.length === 0) {
+        return false;
+    }
+
+    // Check if migration was already done (extension_data dir has files)
+    const extDataDir = directories.extensionData;
+    if (fs.existsSync(extDataDir)) {
+        const existingFiles = fs.readdirSync(extDataDir).filter(f => f.endsWith('.json'));
+        if (existingFiles.length > 0) {
+            // Already migrated, just strip data from settings.json if still present
+            let modified = false;
+            for (const key of keysToMigrate) {
+                if (extensionSettings[key] !== undefined) {
+                    delete extensionSettings[key];
+                    modified = true;
+                }
+            }
+            if (modified) {
+                writeFileAtomicSync(pathToSettings, JSON.stringify(settings, null, 4), 'utf8');
+            }
+            return false;
+        }
+    } else {
+        fs.mkdirSync(extDataDir, { recursive: true });
+    }
+
+    console.log(`[Settings Migration] Migrating ${keysToMigrate.length} extension data entries to separate files...`);
+
+    // Write each extension's data to its own file
+    for (const key of keysToMigrate) {
+        try {
+            const filePath = path.join(extDataDir, `${key}.json`);
+            writeFileAtomicSync(filePath, JSON.stringify(extensionSettings[key], null, 4), 'utf8');
+        } catch (err) {
+            console.error(`[Settings Migration] Failed to migrate extension data for "${key}":`, err);
+        }
+    }
+
+    // Remove migrated keys from settings.json
+    for (const key of keysToMigrate) {
+        delete extensionSettings[key];
+    }
+    writeFileAtomicSync(pathToSettings, JSON.stringify(settings, null, 4), 'utf8');
+
+    console.log(`[Settings Migration] Migration complete. ${keysToMigrate.length} extensions migrated.`);
+    return true;
+}
+
+/**
+ * GET /api/settings/extension-settings
+ * Reads all per-extension JSON files from extension_data/ directory.
+ * Returns a merged object { extName: extData, ... }
+ */
+router.get('/extension-settings', (request, response) => {
+    try {
+        const extDataDir = request.user.directories.extensionData;
+        if (!fs.existsSync(extDataDir)) {
+            return response.json({});
+        }
+
+        const result = {};
+        const files = fs.readdirSync(extDataDir).filter(f => f.endsWith('.json'));
+        for (const file of files) {
+            try {
+                const key = path.parse(file).name;
+                const content = fs.readFileSync(path.join(extDataDir, file), 'utf8');
+                result[key] = JSON.parse(content);
+            } catch {
+                // Skip invalid files
+            }
+        }
+        response.json(result);
+    } catch (err) {
+        console.error('Error reading extension settings:', err);
+        response.sendStatus(500);
+    }
+});
+
+/**
+ * POST /api/settings/extension-settings
+ * Saves a single extension's data to a separate JSON file.
+ * Body: { key: string, data: any }
+ */
+router.post('/extension-settings', (request, response) => {
+    try {
+        const { key, data } = request.body;
+        if (!key || typeof key !== 'string') {
+            return response.status(400).json({ error: 'Missing or invalid "key"' });
+        }
+
+        const extDataDir = request.user.directories.extensionData;
+        if (!fs.existsSync(extDataDir)) {
+            fs.mkdirSync(extDataDir, { recursive: true });
+        }
+
+        const filePath = path.join(extDataDir, `${key}.json`);
+        writeFileAtomicSync(filePath, JSON.stringify(data, null, 4), 'utf8');
+        response.json({ result: 'ok' });
+    } catch (err) {
+        console.error('Error saving extension settings:', err);
+        response.sendStatus(500);
+    }
+});
+
 // Wintermute's code
 router.post('/get', (request, response) => {
+    // Run migration on first load if needed
+    try {
+        migrateExtensionSettings(request.user.directories);
+    } catch (err) {
+        console.error('Extension settings migration failed:', err);
+    }
+
     let settings;
     try {
         const pathToSettings = path.join(request.user.directories.root, SETTINGS_FILE);
