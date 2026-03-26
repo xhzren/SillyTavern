@@ -1,4 +1,4 @@
-import { Client } from '@modelcontextprotocol/sdk/client.js';
+import { Client } from '@modelcontextprotocol/sdk/client';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
