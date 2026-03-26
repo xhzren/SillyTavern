@@ -2,9 +2,19 @@ import { Client } from '@modelcontextprotocol/sdk/client.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+const MODEL = process.env.MODEL || 'claude-sonnet-4-6-20250514';
 const POLL_INTERVAL = 10000; // 10 seconds
 
 const repliedMessages = new Set();
+
+process.on('SIGINT', async () => {
+  console.log('[WeChat Agent] Shutting down...');
+  process.exit(0);
+});
+process.on('SIGTERM', async () => {
+  console.log('[WeChat Agent] Shutting down...');
+  process.exit(0);
+});
 
 /**
  * Create MCP client connected to wechat server
@@ -86,10 +96,11 @@ async function generateResponse(messageTexts) {
       'anthropic-version': '2023-06-01'
     },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-6-20250514',
+      model: MODEL,
       max_tokens: 1024,
       messages: messageTexts.map(text => ({ role: 'user', content: text }))
-    })
+    }),
+    signal: AbortSignal.timeout(30000)
   });
 
   if (!response.ok) {
@@ -135,6 +146,10 @@ async function processMessage(client, message) {
  */
 async function main() {
   console.log('[WeChat Agent] Starting...');
+
+  if (!ANTHROPIC_API_KEY) {
+    console.warn('[WeChat Agent] WARNING: ANTHROPIC_API_KEY not set, AI responses disabled');
+  }
 
   const client = await createWeChatClient();
   console.log('[WeChat Agent] Connected to WeChat MCP server');
