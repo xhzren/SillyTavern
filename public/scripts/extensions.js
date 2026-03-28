@@ -293,14 +293,29 @@ function createDeepProxy(target, rootKey = null) {
         get(obj, prop) {
             let actualProp = prop;
             if (rootKey === null && typeof prop === 'string' && typeof prop !== 'symbol' && !(prop in obj)) {
-                const normalize = (str) => String(str).toLowerCase().replace(/[^a-z0-9]/g, '').replace(/^(sillytavern|st|extension)/g, '');
-                const normProp = normalize(prop);
-                if (normProp.length > 2) {
+                const rawLower = String(prop).toLowerCase();
+                const HARDCODED_ALIASES = {
+                    'tavernhelper': 'JS-Slash-Runner',
+                };
+                
+                if (HARDCODED_ALIASES[rawLower]) {
+                    const aliasTarget = HARDCODED_ALIASES[rawLower].toLowerCase();
                     for (const existingKey of Object.keys(obj)) {
-                        const normKey = normalize(existingKey);
-                        if (normProp === normKey || (normProp.length > 5 && normKey.length > 5 && (normProp.includes(normKey) || normKey.includes(normProp)))) {
+                        if (existingKey.toLowerCase() === aliasTarget) {
                             actualProp = existingKey;
                             break;
+                        }
+                    }
+                } else {
+                    const normalize = (str) => String(str).toLowerCase().replace(/[^a-z0-9]/g, '').replace(/^(sillytavern|st|extension)/g, '');
+                    const normProp = normalize(prop);
+                    if (normProp.length > 2) {
+                        for (const existingKey of Object.keys(obj)) {
+                            const normKey = normalize(existingKey);
+                            if (normProp === normKey || (normProp.length > 5 && normKey.length > 5 && (normProp.includes(normKey) || normKey.includes(normProp)))) {
+                                actualProp = existingKey;
+                                break;
+                            }
                         }
                     }
                 }
@@ -316,14 +331,29 @@ function createDeepProxy(target, rootKey = null) {
         set(obj, prop, value) {
             let actualProp = prop;
             if (rootKey === null && typeof prop === 'string' && typeof prop !== 'symbol' && !(prop in obj)) {
-                const normalize = (str) => String(str).toLowerCase().replace(/[^a-z0-9]/g, '').replace(/^(sillytavern|st|extension)/g, '');
-                const normProp = normalize(prop);
-                if (normProp.length > 2) {
+                const rawLower = String(prop).toLowerCase();
+                const HARDCODED_ALIASES = {
+                    'tavernhelper': 'JS-Slash-Runner',
+                };
+                
+                if (HARDCODED_ALIASES[rawLower]) {
+                    const aliasTarget = HARDCODED_ALIASES[rawLower].toLowerCase();
                     for (const existingKey of Object.keys(obj)) {
-                        const normKey = normalize(existingKey);
-                        if (normProp === normKey || (normProp.length > 5 && normKey.length > 5 && (normProp.includes(normKey) || normKey.includes(normProp)))) {
+                        if (existingKey.toLowerCase() === aliasTarget) {
                             actualProp = existingKey;
                             break;
+                        }
+                    }
+                } else {
+                    const normalize = (str) => String(str).toLowerCase().replace(/[^a-z0-9]/g, '').replace(/^(sillytavern|st|extension)/g, '');
+                    const normProp = normalize(prop);
+                    if (normProp.length > 2) {
+                        for (const existingKey of Object.keys(obj)) {
+                            const normKey = normalize(existingKey);
+                            if (normProp === normKey || (normProp.length > 5 && normKey.length > 5 && (normProp.includes(normKey) || normKey.includes(normProp)))) {
+                                actualProp = existingKey;
+                                break;
+                            }
                         }
                     }
                 }
@@ -340,14 +370,29 @@ function createDeepProxy(target, rootKey = null) {
         deleteProperty(obj, prop) {
             let actualProp = prop;
             if (rootKey === null && typeof prop === 'string' && typeof prop !== 'symbol' && !(prop in obj)) {
-                const normalize = (str) => String(str).toLowerCase().replace(/[^a-z0-9]/g, '').replace(/^(sillytavern|st|extension)/g, '');
-                const normProp = normalize(prop);
-                if (normProp.length > 2) {
+                const rawLower = String(prop).toLowerCase();
+                const HARDCODED_ALIASES = {
+                    'tavernhelper': 'JS-Slash-Runner',
+                };
+                
+                if (HARDCODED_ALIASES[rawLower]) {
+                    const aliasTarget = HARDCODED_ALIASES[rawLower].toLowerCase();
                     for (const existingKey of Object.keys(obj)) {
-                        const normKey = normalize(existingKey);
-                        if (normProp === normKey || (normProp.length > 5 && normKey.length > 5 && (normProp.includes(normKey) || normKey.includes(normProp)))) {
+                        if (existingKey.toLowerCase() === aliasTarget) {
                             actualProp = existingKey;
                             break;
+                        }
+                    }
+                } else {
+                    const normalize = (str) => String(str).toLowerCase().replace(/[^a-z0-9]/g, '').replace(/^(sillytavern|st|extension)/g, '');
+                    const normProp = normalize(prop);
+                    if (normProp.length > 2) {
+                        for (const existingKey of Object.keys(obj)) {
+                            const normKey = normalize(existingKey);
+                            if (normProp === normKey || (normProp.length > 5 && normKey.length > 5 && (normProp.includes(normKey) || normKey.includes(normProp)))) {
+                                actualProp = existingKey;
+                                break;
+                            }
                         }
                     }
                 }

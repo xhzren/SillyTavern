@@ -266,10 +266,24 @@ function getActiveExtensionFolders() {
  */
 function findMatchingFolder(key, activeFolders) {
     const keyLower = key.toLowerCase();
+
+    // 1. Check hardcoded aliases
+    const HARDCODED_ALIASES = {
+        'tavernhelper': 'JS-Slash-Runner',
+    };
+    if (HARDCODED_ALIASES[keyLower]) {
+        const aliasTarget = HARDCODED_ALIASES[keyLower].toLowerCase();
+        for (const folder of activeFolders) {
+            if (folder.toLowerCase() === aliasTarget) return folder;
+        }
+    }
+
+    // 2. Exact match
     for (const folder of activeFolders) {
         if (folder.toLowerCase() === keyLower) return folder;
     }
     
+    // 3. Fuzzy match
     const normalize = (str) => str.toLowerCase().replace(/[^a-z0-9]/g, '').replace(/^(sillytavern|st|extension)/g, '');
     const normKey = normalize(key);
     
