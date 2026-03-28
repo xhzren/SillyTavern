@@ -247,10 +247,37 @@ const _extension_settings_data = {
 const proxyCache = new WeakMap();
 
 /**
+ * Clears all entries from the proxy cache.
+ * Should be called after bulk-replacing data in _extension_settings_data
+ * to avoid stale proxy references.
+ */
+function clearProxyCache() {
+    // WeakMap doesn't have .clear(), so we need to replace the reference.
+    // But since proxyCache is captured by closure in createDeepProxy, we
+    // need to delete known keys. We track the root object at minimum.
+    // The most reliable approach is to walk _extension_settings_data and
+    // delete all cached proxies by iterating known object values.
+    const visited = new Set();
+    const stack = [_extension_settings_data];
+    while (stack.length > 0) {
+        const obj = stack.pop();
+        if (typeof obj !== 'object' || obj === null || visited.has(obj)) continue;
+        visited.add(obj);
+        proxyCache.delete(obj);
+        for (const value of Object.values(obj)) {
+            if (typeof value === 'object' && value !== null) {
+                stack.push(value);
+            }
+        }
+    }
+}
+
+/**
  * Creates a deep Proxy that tracks mutations and marks the root extension key as dirty.
- * @param {object} target - The object to wrap
+ * @template T
+ * @param {T} target - The object to wrap
  * @param {string|null} rootKey - The top-level key in extension_settings this object belongs to (null if this is the root object itself)
- * @returns {Proxy} The wrapped object
+ * @returns {T} The wrapped object
  */
 function createDeepProxy(target, rootKey = null) {
     if (typeof target !== 'object' || target === null) {
@@ -264,18 +291,46 @@ function createDeepProxy(target, rootKey = null) {
 
     const proxy = new Proxy(target, {
         get(obj, prop) {
-            const value = obj[prop];
-            // Only proxy objects/arrays, and avoid proxying DOM nodes or special objects if any sneak in
+            let actualProp = prop;
+            if (rootKey === null && typeof prop === 'string' && typeof prop !== 'symbol' && !(prop in obj)) {
+                const normalize = (str) => String(str).toLowerCase().replace(/[^a-z0-9]/g, '').replace(/^(sillytavern|st|extension)/g, '');
+                const normProp = normalize(prop);
+                if (normProp.length > 2) {
+                    for (const existingKey of Object.keys(obj)) {
+                        const normKey = normalize(existingKey);
+                        if (normProp === normKey || (normProp.length > 5 && normKey.length > 5 && (normProp.includes(normKey) || normKey.includes(normProp)))) {
+                            actualProp = existingKey;
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            const value = obj[actualProp];
             if (typeof value === 'object' && value !== null && !(value instanceof Node)) {
-                // Determine the root key. If we are at the root object, the prop being accessed is the root key.
-                const currentRootKey = rootKey === null ? prop : rootKey;
+                const currentRootKey = rootKey === null ? String(actualProp) : rootKey;
                 return createDeepProxy(value, currentRootKey);
             }
             return value;
         },
         set(obj, prop, value) {
-            obj[prop] = value;
-            const currentRootKey = rootKey === null ? prop : rootKey;
+            let actualProp = prop;
+            if (rootKey === null && typeof prop === 'string' && typeof prop !== 'symbol' && !(prop in obj)) {
+                const normalize = (str) => String(str).toLowerCase().replace(/[^a-z0-9]/g, '').replace(/^(sillytavern|st|extension)/g, '');
+                const normProp = normalize(prop);
+                if (normProp.length > 2) {
+                    for (const existingKey of Object.keys(obj)) {
+                        const normKey = normalize(existingKey);
+                        if (normProp === normKey || (normProp.length > 5 && normKey.length > 5 && (normProp.includes(normKey) || normKey.includes(normProp)))) {
+                            actualProp = existingKey;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            obj[actualProp] = value;
+            const currentRootKey = rootKey === null ? String(actualProp) : rootKey;
             
             if (typeof currentRootKey === 'string' && !EXTENSION_SETTINGS_METADATA_KEYS.has(currentRootKey)) {
                 _dirty_extension_keys.add(currentRootKey);
@@ -283,8 +338,23 @@ function createDeepProxy(target, rootKey = null) {
             return true;
         },
         deleteProperty(obj, prop) {
-            delete obj[prop];
-            const currentRootKey = rootKey === null ? prop : rootKey;
+            let actualProp = prop;
+            if (rootKey === null && typeof prop === 'string' && typeof prop !== 'symbol' && !(prop in obj)) {
+                const normalize = (str) => String(str).toLowerCase().replace(/[^a-z0-9]/g, '').replace(/^(sillytavern|st|extension)/g, '');
+                const normProp = normalize(prop);
+                if (normProp.length > 2) {
+                    for (const existingKey of Object.keys(obj)) {
+                        const normKey = normalize(existingKey);
+                        if (normProp === normKey || (normProp.length > 5 && normKey.length > 5 && (normProp.includes(normKey) || normKey.includes(normProp)))) {
+                            actualProp = existingKey;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            delete obj[actualProp];
+            const currentRootKey = rootKey === null ? String(actualProp) : rootKey;
             
             if (typeof currentRootKey === 'string' && !EXTENSION_SETTINGS_METADATA_KEYS.has(currentRootKey)) {
                 _dirty_extension_keys.add(currentRootKey);
@@ -301,8 +371,9 @@ function createDeepProxy(target, rootKey = null) {
  * Proxy-wrapped extension_settings object.
  * All reads/writes go through this deep Proxy, which tracks dirty keys for per-extension saving.
  * Third-party extensions use this transparently — no code changes needed on their side.
+ * @type {typeof _extension_settings_data & Record<string, any>}
  */
-export const extension_settings = createDeepProxy(_extension_settings_data);
+export const extension_settings = /** @type {typeof _extension_settings_data & Record<string, any>} */ (createDeepProxy(_extension_settings_data));
 
 /**
  * Returns an object containing only the metadata keys from extension_settings.
@@ -320,8 +391,15 @@ export function getExtensionSettingsMetadata() {
 }
 
 /**
+ * Flag to prevent concurrent saves.
+ * @type {boolean}
+ */
+let _saveInProgress = false;
+
+/**
  * Saves dirty extension data to separate per-extension files on the server.
  * Called by saveSettings() after saving the main settings.json.
+ * Uses a lock to prevent overlapping concurrent saves.
  * @returns {Promise<void>}
  */
 export async function saveExtensionSettings() {
@@ -329,28 +407,38 @@ export async function saveExtensionSettings() {
         return;
     }
 
-    const keysToSave = [..._dirty_extension_keys];
-    _dirty_extension_keys.clear();
+    if (_saveInProgress) {
+        // Another save is in progress; dirty keys will be picked up by the next save
+        return;
+    }
 
-    const promises = keysToSave.map(async (key) => {
-        try {
-            const response = await fetch('/api/settings/extension-settings', {
-                method: 'POST',
-                headers: getRequestHeaders(),
-                body: JSON.stringify({ key, data: _extension_settings_data[key] }),
-            });
-            if (!response.ok) {
-                console.error(`Failed to save extension settings for "${key}":`, response.statusText);
-                // Re-mark as dirty so it gets retried on next save
+    _saveInProgress = true;
+    try {
+        const keysToSave = [..._dirty_extension_keys];
+        _dirty_extension_keys.clear();
+
+        const promises = keysToSave.map(async (key) => {
+            try {
+                const response = await fetch('/api/settings/extension-settings', {
+                    method: 'POST',
+                    headers: getRequestHeaders(),
+                    body: JSON.stringify({ key, data: _extension_settings_data[key] }),
+                });
+                if (!response.ok) {
+                    console.error(`Failed to save extension settings for "${key}":`, response.statusText);
+                    // Re-mark as dirty so it gets retried on next save
+                    _dirty_extension_keys.add(key);
+                }
+            } catch (err) {
+                console.error(`Error saving extension settings for "${key}":`, err);
                 _dirty_extension_keys.add(key);
             }
-        } catch (err) {
-            console.error(`Error saving extension settings for "${key}":`, err);
-            _dirty_extension_keys.add(key);
-        }
-    });
+        });
 
-    await Promise.allSettled(promises);
+        await Promise.allSettled(promises);
+    } finally {
+        _saveInProgress = false;
+    }
 }
 
 function showHideExtensionsMenu() {
@@ -1312,10 +1400,23 @@ async function onDeleteClick() {
         return;
     }
 
-    // use callPopup to create a popup for the user to confirm before delete
-    const confirmation = await callGenericPopup(t`Are you sure you want to delete ${extensionName}?`, POPUP_TYPE.CONFIRM, '', {});
+    let deleteData = false;
+    const template = `
+        <div>${t`Are you sure you want to delete ${extensionName}?`}</div>
+        <div style="margin-top: 10px;">
+            <label><input type="checkbox" id="delete_extension_data_checkbox"> ${t`Also delete extension data (${extensionName}.json)?`}</label>
+        </div>
+    `;
+    const confirmation = await callGenericPopup(template, POPUP_TYPE.CONFIRM, '', { 
+        escapeHtml: false,
+        onClosing: () => {
+            deleteData = Boolean($('#delete_extension_data_checkbox').prop('checked'));
+            return true;
+        }
+    });
+
     if (confirmation === POPUP_RESULT.AFFIRMATIVE) {
-        await deleteExtension(extensionName);
+        await deleteExtension(extensionName, deleteData);
     }
 }
 
@@ -1421,8 +1522,51 @@ async function moveExtension(extensionName, source, destination) {
 /**
  * Deletes an extension via the API.
  * @param {string} extensionName Extension name to delete
+ * @param {boolean} deleteData Whether to delete the associated extension settings data
  */
-export async function deleteExtension(extensionName) {
+export async function deleteExtension(extensionName, deleteData = false) {
+    if (deleteData) {
+        try {
+            // Extension names from the UI often include the directory prefix like 'third-party/'
+            // We strip this off to find the base key name.
+            let baseKey = extensionName;
+            if (baseKey.startsWith('third-party/')) {
+                baseKey = baseKey.replace('third-party/', '');
+            } else if (baseKey.includes('/')) {
+                baseKey = baseKey.split('/').pop() || baseKey;
+            }
+
+            await fetch('/api/settings/extension-settings/delete', {
+                method: 'POST',
+                headers: getRequestHeaders(),
+                body: JSON.stringify({ key: baseKey }),
+            });
+            
+            if (Array.isArray(extension_settings.disabledExtensions)) {
+                extension_settings.disabledExtensions = extension_settings.disabledExtensions.filter(x => x !== extensionName);
+            }
+            
+            // Delete both the raw name and the base key from the local cache
+            delete extension_settings[baseKey];
+            delete extension_settings[extensionName];
+            
+            // Attempt a fuzzy match on the frontend memory too, similar to backend
+            const normalize = (str) => str.toLowerCase().replace(/[^a-z0-9]/g, '').replace(/^(sillytavern|st|extension)/g, '');
+            const normBase = normalize(baseKey);
+            for (const key of Object.keys(extension_settings)) {
+                if (typeof key === 'string') {
+                    const normKey = normalize(key);
+                    if (normBase === normKey || (normBase.length > 5 && normKey.length > 5 && (normBase.includes(normKey) || normKey.includes(normBase)))) {
+                        delete extension_settings[key];
+                    }
+                }
+            }
+            
+            saveSettingsDebounced();
+        } catch (error) {
+            console.error('Error deleting extension data:', error);
+        }
+    }
     try {
         await fetch('/api/extensions/delete', {
             method: 'POST',
@@ -1569,6 +1713,9 @@ export async function installExtension(url, global, branch = '') {
     const response = await request.json();
     toastr.success(t`Extension '${response.display_name}' by ${response.author} (version ${response.version}) has been installed successfully!`, t`Extension installation successful`);
     console.debug(`Extension "${response.display_name}" has been installed successfully at ${response.extensionPath}`);
+    
+
+
     await loadExtensionSettings({}, false, false);
     await eventSource.emit(event_types.EXTENSION_SETTINGS_LOADED, response);
 }
@@ -1595,6 +1742,8 @@ export async function loadExtensionSettings(settings, versionChanged, enableAuto
             const extensionData = await response.json();
             // Merge per-extension data into extension_settings (overrides any stale data from settings.json)
             Object.assign(_extension_settings_data, extensionData);
+            // Clear proxy cache to avoid stale proxy references after data replacement
+            clearProxyCache();
         }
     } catch (err) {
         console.error('Failed to load per-extension settings:', err);

@@ -111,6 +111,17 @@ router.post('/install', async (request, response) => {
 
         const { version, author, display_name } = await getManifest(extensionPath);
 
+        // Natively seed the extension data file using the exact folder name immediately
+        const folderName = path.basename(extensionPath);
+        const extDataDir = request.user.directories.extensionData;
+        if (!fs.existsSync(extDataDir)) {
+            fs.mkdirSync(extDataDir, { recursive: true });
+        }
+        const configPath = path.join(extDataDir, `${folderName}.json`);
+        if (!fs.existsSync(configPath)) {
+            fs.writeFileSync(configPath, '{}', 'utf8');
+        }
+
         return response.send({ version, author, display_name, extensionPath });
     } catch (error) {
         console.error('Importing custom content failed', error);

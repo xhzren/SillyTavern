@@ -1,0 +1,47 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:skills.sh)",
+      "WebFetch(domain:github.com)",
+      "Bash(npm list:*)",
+      "Bash(node:*)",
+      "Bash(npm install:*)",
+      "Bash(episodic-memory sync:*)",
+      "Skill(update-config)",
+      "Bash(gh api:*)",
+      "Bash(curl -s \"https://raw.githubusercontent.com/Howardzhangdqs/mcp-wechat-server/main/README.md\")",
+      "Bash(bun:*)",
+      "Bash(bunx mcp-wechat-server:*)",
+      "Bash(claude mcp:*)",
+      "mcp__wechat__login_qrcode",
+      "mcp__wechat__check_qrcode_status",
+      "mcp__wechat__get_messages",
+      "Bash(npm info:*)",
+      "Bash(npm pack:*)",
+      "Bash(npm:*)",
+      "Bash(ls /d/Dev/SillyTavern/node_modules/@modelcontextprotocol/sdk/dist/esm/*.js)",
+      "Bash(ls:*)",
+      "Bash(tar -tf /tmp/modelcontextprotocol-sdk-1.28.0.tgz)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(tar -xf /tmp/modelcontextprotocol-sdk-1.28.0.tgz -C /tmp/)",
+      "Bash(tar -tf /tmp/modelcontextprotocol-sdk-1.27.1.tgz)",
+      "Bash(grep -E \"^package/dist/\\(esm|cjs\\)/index\\\\.js$\")",
+      "Bash(tar -tf /tmp/modelcontextprotocol-sdk-1.25.3.tgz)",
+      "mcp__wechat__send_typing",
+      "mcp__wechat__send_text_message"
+    ]
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    {
+      "wechat": {
+        "type": "stdio",
+        "command": "bunx",
+        "args": [
+          "mcp-wechat-server"
+        ],
+        "env": {}
+      }
+    }
+  ]
+}

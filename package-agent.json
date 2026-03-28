@@ -1,7 +1,0 @@
-{
-  "name": "wechat-agent",
-  "type": "module",
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.28.0"
-  }
-}

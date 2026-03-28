@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "data-visualization": {
+      "source": "anthropics/knowledge-work-plugins",
+      "sourceType": "github",
+      "computedHash": "a238cd5981b2da6bd7ecc24cfb3d7238be993ee5a2ad97acb414f9758aba13dd"
+    }
+  }
+}

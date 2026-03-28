@@ -271,7 +271,44 @@ export class DataMaidService {
                 }
             }
             const pathToSettings = path.join(this.directories.root, SETTINGS_FILE);
-            if (fs.existsSync(pathToSettings)) {
+            const extDataDir = this.directories.extensionData;
+            const hasExtensionData = extDataDir && fs.existsSync(extDataDir);
+
+            // Prefer per-extension data files (post-migration layout)
+            if (hasExtensionData) {
+                try {
+                    const attachmentsPath = path.join(extDataDir, 'attachments.json');
+                    if (fs.existsSync(attachmentsPath)) {
+                        const attachments = tryParse(await fs.promises.readFile(attachmentsPath, 'utf-8'));
+                        if (Array.isArray(attachments)) {
+                            for (const file of attachments) {
+                                if (file?.url) {
+                                    knownFiles.add(file.url);
+                                }
+                            }
+                        }
+                    }
+                    const charAttachmentsPath = path.join(extDataDir, 'character_attachments.json');
+                    if (fs.existsSync(charAttachmentsPath)) {
+                        const charAttachments = tryParse(await fs.promises.readFile(charAttachmentsPath, 'utf-8'));
+                        if (typeof charAttachments === 'object' && charAttachments !== null) {
+                            for (const files of Object.values(charAttachments)) {
+                                if (!Array.isArray(files)) {
+                                    continue;
+                                }
+                                for (const file of files) {
+                                    if (file?.url) {
+                                        knownFiles.add(file.url);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } catch (error) {
+                    console.error('[Data Maid] Error reading per-extension data files:', error);
+                }
+            } else if (fs.existsSync(pathToSettings)) {
+                // Backward compat: read from settings.json if extension_data doesn't exist (pre-migration)
                 try {
                     const settingsContent = await fs.promises.readFile(pathToSettings, 'utf-8');
                     const settings = tryParse(settingsContent);
@@ -296,40 +333,6 @@ export class DataMaidService {
                     }
                 } catch (error) {
                     console.error('[Data Maid] Error reading settings file:', error);
-                }
-            }
-            // Also read from per-extension data files (post-migration layout)
-            if (this.directories.extensionData && fs.existsSync(this.directories.extensionData)) {
-                try {
-                    const attachmentsPath = path.join(this.directories.extensionData, 'attachments.json');
-                    if (fs.existsSync(attachmentsPath)) {
-                        const attachments = tryParse(await fs.promises.readFile(attachmentsPath, 'utf-8'));
-                        if (Array.isArray(attachments)) {
-                            for (const file of attachments) {
-                                if (file?.url) {
-                                    knownFiles.add(file.url);
-                                }
-                            }
-                        }
-                    }
-                    const charAttachmentsPath = path.join(this.directories.extensionData, 'character_attachments.json');
-                    if (fs.existsSync(charAttachmentsPath)) {
-                        const charAttachments = tryParse(await fs.promises.readFile(charAttachmentsPath, 'utf-8'));
-                        if (typeof charAttachments === 'object' && charAttachments !== null) {
-                            for (const files of Object.values(charAttachments)) {
-                                if (!Array.isArray(files)) {
-                                    continue;
-                                }
-                                for (const file of files) {
-                                    if (file?.url) {
-                                        knownFiles.add(file.url);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                } catch (error) {
-                    console.error('[Data Maid] Error reading per-extension data files:', error);
                 }
             }
             const knownFileFullPaths = new Set();
