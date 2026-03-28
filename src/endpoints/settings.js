@@ -298,7 +298,6 @@ function cleanupDuplicateExtensionFiles(extDataDir) {
     }
 
     const files = fs.readdirSync(extDataDir).filter(f => f.endsWith('.json'));
-    console.log(`[ExtDebug][Cleanup] Found ${files.length} .json files to scan`);
     const fileSet = new Set(files);
     const removed = [];
 
@@ -310,12 +309,11 @@ function cleanupDuplicateExtensionFiles(extDataDir) {
             const normalizedName = baseName.replace(/\s+/g, '_').toLowerCase();
             const match = files.find(f => path.parse(f).name.toLowerCase() === normalizedName && f !== file);
             if (match && fileSet.has(file)) {
-                console.log(`[ExtDebug][Cleanup] Removing space-duplicate: "${file}" (keeping "${match}")`);
                 try {
                     fs.unlinkSync(path.join(extDataDir, file));
                     fileSet.delete(file);
                     removed.push(file);
-                } catch (err) { console.warn(`[ExtDebug][Cleanup] Failed to delete "${file}":`, err.message); }
+                } catch (err) { }
                 continue;
             }
         }
@@ -324,20 +322,13 @@ function cleanupDuplicateExtensionFiles(extDataDir) {
         if (baseName.endsWith('-old')) {
             const baseWithoutOld = baseName.slice(0, -4) + '.json';
             if (fileSet.has(baseWithoutOld)) {
-                console.log(`[ExtDebug][Cleanup] Removing -old duplicate: "${file}" (base "${baseWithoutOld}" exists)`);
                 try {
                     fs.unlinkSync(path.join(extDataDir, file));
                     fileSet.delete(file);
                     removed.push(file);
-                } catch (err) { console.warn(`[ExtDebug][Cleanup] Failed to delete "${file}":`, err.message); }
+                } catch (err) { }
             }
         }
-    }
-
-    if (removed.length > 0) {
-        console.log(`[ExtDebug][Cleanup] ✅ Removed ${removed.length} duplicate/outdated files: ${removed.join(', ')}`);
-    } else {
-        console.log('[ExtDebug][Cleanup] ✅ No duplicates found');
     }
 }
 
@@ -349,11 +340,8 @@ function cleanupDuplicateExtensionFiles(extDataDir) {
  * @returns {boolean} Whether migration was performed
  */
 function migrateExtensionSettings(directories) {
-    console.log('[ExtDebug][Migration] ========== START migrateExtensionSettings ==========');
     const pathToSettings = path.join(directories.root, SETTINGS_FILE);
-    console.log(`[ExtDebug][Migration] Settings file: ${pathToSettings}`);
     if (!fs.existsSync(pathToSettings)) {
-        console.log('[ExtDebug][Migration] Settings file not found, aborting');
         return false;
     }
 
@@ -361,41 +349,27 @@ function migrateExtensionSettings(directories) {
     try {
         settings = JSON.parse(fs.readFileSync(pathToSettings, 'utf8'));
     } catch (err) {
-        console.log('[ExtDebug][Migration] Failed to parse settings.json:', err.message);
         return false;
     }
 
     const extensionSettings = settings?.extension_settings;
     if (!extensionSettings || typeof extensionSettings !== 'object') {
-        console.log('[ExtDebug][Migration] No extension_settings object in settings, aborting');
         return false;
     }
 
     const allKeys = Object.keys(extensionSettings);
-    const metadataKeys = allKeys.filter(k => EXTENSION_SETTINGS_METADATA_KEYS.has(k));
     const keysToMigrate = allKeys.filter(k => !EXTENSION_SETTINGS_METADATA_KEYS.has(k));
-    console.log(`[ExtDebug][Migration] extension_settings has ${allKeys.length} keys total`);
-    console.log(`[ExtDebug][Migration]   Metadata keys (stay in settings.json): [${metadataKeys.join(', ')}]`);
-    console.log(`[ExtDebug][Migration]   Data keys (to migrate): ${keysToMigrate.length} keys`);
-    if (keysToMigrate.length > 0) {
-        console.log(`[ExtDebug][Migration]   Data keys list: [${keysToMigrate.join(', ')}]`);
-    }
 
     if (keysToMigrate.length === 0) {
-        console.log('[ExtDebug][Migration] No data keys to migrate, running cleanup only');
         cleanupDuplicateExtensionFiles(directories.extensionData);
         return false;
     }
 
     const extDataDir = directories.extensionData;
     const markerPath = path.join(extDataDir, MIGRATION_MARKER);
-    console.log(`[ExtDebug][Migration] Extension data dir: ${extDataDir}`);
-    console.log(`[ExtDebug][Migration] Migration marker: ${markerPath}`);
-    console.log(`[ExtDebug][Migration] Marker exists: ${fs.existsSync(markerPath)}`);
 
     // Check if migration was already completed via marker file
     if (fs.existsSync(markerPath)) {
-        console.log('[ExtDebug][Migration] ⏩ Marker found → already migrated');
         let modified = false;
         let strippedKeys = [];
         for (const key of keysToMigrate) {
@@ -406,22 +380,15 @@ function migrateExtensionSettings(directories) {
             }
         }
         if (modified) {
-            console.log(`[ExtDebug][Migration] Stripping ${strippedKeys.length} leftover keys from settings.json: [${strippedKeys.join(', ')}]`);
             writeFileAtomicSync(pathToSettings, JSON.stringify(settings, null, 4), 'utf8');
-        } else {
-            console.log('[ExtDebug][Migration] No leftover keys to strip');
         }
         cleanupDuplicateExtensionFiles(extDataDir);
-        console.log('[ExtDebug][Migration] ========== END (already migrated) ==========');
         return false;
     }
 
     if (!fs.existsSync(extDataDir)) {
-        console.log(`[ExtDebug][Migration] Creating extension_data directory: ${extDataDir}`);
         fs.mkdirSync(extDataDir, { recursive: true });
     }
-
-    console.log(`[ExtDebug][Migration] 🚀 Starting fresh migration of ${keysToMigrate.length} extensions...`);
 
     const activeFolders = getActiveExtensionFolders();
 
@@ -431,22 +398,17 @@ function migrateExtensionSettings(directories) {
         try {
             const folderName = findMatchingFolder(key, activeFolders);
             if (!folderName) {
-                console.log(`[ExtDebug][Migration]   ⚠ Key "${key}" does not match any active extension folder. Skipping.`);
                 continue;
             }
             // USE STRICT FOLDER NAME, NEVER CUSTOM KEY
             const filePath = path.join(extDataDir, `${folderName}.json`);
-            const dataSize = JSON.stringify(extensionSettings[key]).length;
             writeFileAtomicSync(filePath, JSON.stringify(extensionSettings[key], null, 4), 'utf8');
-            console.log(`[ExtDebug][Migration]   ✓ -> ${folderName}.json (${dataSize} bytes)`);
             successCount++;
         } catch (err) {
-            console.error(`[ExtDebug][Migration]   ✗ FAILED to migrate "${key}":`, err.message);
         }
     }
 
     // Write marker file BEFORE cleaning settings.json to ensure crash resilience
-    console.log('[ExtDebug][Migration] Writing migration marker file...');
     writeFileAtomicSync(markerPath, new Date().toISOString(), 'utf8');
 
     // Remove migrated keys from settings.json
@@ -454,13 +416,9 @@ function migrateExtensionSettings(directories) {
         delete extensionSettings[key];
     }
     writeFileAtomicSync(pathToSettings, JSON.stringify(settings, null, 4), 'utf8');
-    console.log(`[ExtDebug][Migration] Stripped ${keysToMigrate.length} keys from settings.json`);
-
-    console.log(`[ExtDebug][Migration] ✅ Migration complete: ${successCount}/${keysToMigrate.length} extensions migrated successfully`);
 
     // Clean up duplicates after fresh migration
     cleanupDuplicateExtensionFiles(extDataDir);
-    console.log('[ExtDebug][Migration] ========== END (fresh migration done) ==========');
     return true;
 }
 
@@ -470,12 +428,9 @@ function migrateExtensionSettings(directories) {
  * Returns a merged object { extName: extData, ... }
  */
 router.get('/extension-settings', (request, response) => {
-    console.log('[ExtDebug][GET /extension-settings] ========== Loading per-extension data ==========');
     try {
         const extDataDir = request.user.directories.extensionData;
-        console.log(`[ExtDebug][GET] Extension data dir: ${extDataDir}`);
         if (!fs.existsSync(extDataDir)) {
-            console.log('[ExtDebug][GET] Directory does not exist, returning empty object');
             return response.json({});
         }
 
@@ -498,11 +453,9 @@ router.get('/extension-settings', (request, response) => {
             const stripped = name.replace(/^third-party\//, '');
             return stripped;
         }));
-        console.log(`[ExtDebug][GET] Disabled extensions (${disabledExtensions.length} raw → ${disabledSet.size} normalized): [${[...disabledSet].join(', ')}]`);
 
         const result = {};
         const files = fs.readdirSync(extDataDir).filter(f => f.endsWith('.json'));
-        let loadedCount = 0;
         let skippedDisabled = [];
         let skippedInvalid = [];
         for (const file of files) {
@@ -515,22 +468,13 @@ router.get('/extension-settings', (request, response) => {
                 }
                 const content = fs.readFileSync(path.join(extDataDir, file), 'utf8');
                 result[key] = JSON.parse(content);
-                loadedCount++;
             } catch {
                 skippedInvalid.push(file);
             }
         }
-        console.log(`[ExtDebug][GET] ✅ Loaded ${loadedCount}/${files.length} extensions`);
-        if (skippedDisabled.length > 0) {
-            console.log(`[ExtDebug][GET]   Skipped (disabled): [${skippedDisabled.join(', ')}]`);
-        }
-        if (skippedInvalid.length > 0) {
-            console.log(`[ExtDebug][GET]   Skipped (invalid): [${skippedInvalid.join(', ')}]`);
-        }
-        console.log(`[ExtDebug][GET] Loaded keys: [${Object.keys(result).join(', ')}]`);
         response.json(result);
     } catch (err) {
-        console.error('[ExtDebug][GET] ❌ Error reading extension settings:', err);
+        console.error('Error reading extension settings:', err);
         response.sendStatus(500);
     }
 });
@@ -549,7 +493,6 @@ router.post('/extension-settings', (request, response) => {
 
         const extDataDir = request.user.directories.extensionData;
         if (!fs.existsSync(extDataDir)) {
-            console.log(`[ExtDebug][POST /extension-settings] Creating directory: ${extDataDir}`);
             fs.mkdirSync(extDataDir, { recursive: true });
         }
 
@@ -558,12 +501,10 @@ router.post('/extension-settings', (request, response) => {
         const fileName = folderName || key; // Force file to be named exactly like the folder if it matches one
         
         const filePath = path.join(extDataDir, `${fileName}.json`);
-        const dataSize = JSON.stringify(data).length;
         writeFileAtomicSync(filePath, JSON.stringify(data, null, 4), 'utf8');
-        console.log(`[ExtDebug][POST /extension-settings] Saved: ${fileName}.json (${dataSize} bytes) [Mapped from key: ${key}]`);
         response.json({ result: 'ok', mappedFile: `${fileName}.json` });
     } catch (err) {
-        console.error('[ExtDebug][POST /extension-settings] ❌ Error saving:', err);
+        console.error('Error saving extension settings:', err);
         response.sendStatus(500);
     }
 });
@@ -589,9 +530,6 @@ router.post('/extension-settings/delete', (request, response) => {
 
             if (fs.existsSync(exactPath)) {
                 fs.unlinkSync(exactPath);
-                console.log(`[ExtDebug][POST /extension-settings/delete] Deleted exact match: ${targetFile}`);
-            } else {
-                console.warn(`[ExtDebug][POST /extension-settings/delete] File not found: ${targetFile}`);
             }
         }
         response.json({ result: 'ok' });
