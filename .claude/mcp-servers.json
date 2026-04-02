@@ -1,0 +1,10 @@
+{
+  "wechat": {
+    "type": "stdio",
+    "command": "bunx",
+    "args": [
+      "mcp-wechat-server"
+    ],
+    "env": {}
+  }
+}

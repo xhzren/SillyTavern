@@ -31,17 +31,5 @@
       "mcp__wechat__send_text_message"
     ]
   },
-  "enableAllProjectMcpServers": true,
-  "enabledMcpjsonServers": [
-    {
-      "wechat": {
-        "type": "stdio",
-        "command": "bunx",
-        "args": [
-          "mcp-wechat-server"
-        ],
-        "env": {}
-      }
-    }
-  ]
+  "enableAllProjectMcpServers": true
 }

@@ -299,13 +299,7 @@ function createDeepProxy(target, rootKey = null) {
                 };
                 
                 if (HARDCODED_ALIASES[rawLower]) {
-                    const aliasTarget = HARDCODED_ALIASES[rawLower].toLowerCase();
-                    for (const existingKey of Object.keys(obj)) {
-                        if (existingKey.toLowerCase() === aliasTarget) {
-                            actualProp = existingKey;
-                            break;
-                        }
-                    }
+                    actualProp = HARDCODED_ALIASES[rawLower];
                 } else {
                     const normalize = (str) => String(str).toLowerCase().replace(/[^a-z0-9]/g, '').replace(/^(sillytavern|st|extension)/g, '');
                     const normProp = normalize(prop);
@@ -337,13 +331,7 @@ function createDeepProxy(target, rootKey = null) {
                 };
                 
                 if (HARDCODED_ALIASES[rawLower]) {
-                    const aliasTarget = HARDCODED_ALIASES[rawLower].toLowerCase();
-                    for (const existingKey of Object.keys(obj)) {
-                        if (existingKey.toLowerCase() === aliasTarget) {
-                            actualProp = existingKey;
-                            break;
-                        }
-                    }
+                    actualProp = HARDCODED_ALIASES[rawLower];
                 } else {
                     const normalize = (str) => String(str).toLowerCase().replace(/[^a-z0-9]/g, '').replace(/^(sillytavern|st|extension)/g, '');
                     const normProp = normalize(prop);
@@ -376,13 +364,7 @@ function createDeepProxy(target, rootKey = null) {
                 };
                 
                 if (HARDCODED_ALIASES[rawLower]) {
-                    const aliasTarget = HARDCODED_ALIASES[rawLower].toLowerCase();
-                    for (const existingKey of Object.keys(obj)) {
-                        if (existingKey.toLowerCase() === aliasTarget) {
-                            actualProp = existingKey;
-                            break;
-                        }
-                    }
+                    actualProp = HARDCODED_ALIASES[rawLower];
                 } else {
                     const normalize = (str) => String(str).toLowerCase().replace(/[^a-z0-9]/g, '').replace(/^(sillytavern|st|extension)/g, '');
                     const normProp = normalize(prop);
