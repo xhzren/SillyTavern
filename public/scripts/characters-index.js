@@ -583,28 +583,163 @@ async function _applyAppendVersionLogic(peeked, characters, file, getRequestHead
  * @param {Function} getRequestHeaders
  */
 async function _deleteCharacterWorldBook(charEntry, getRequestHeaders) {
-    // character_world is stored in data.extensions.world (from the loaded shallow entry)
-    // or in the character object itself
-    const worldName = charEntry?.data?.extensions?.world ?? charEntry?.world ?? '';
-    if (!worldName) {
-        dbgLog('No world book associated with this character');
-        return;
-    }
-
-    dbgLog(`Deleting world book: "${worldName}"`);
     try {
-        const res = await fetch('/api/worldinfo/delete', {
+        dbgLog(`Fetching character data for world book lookup: "${charEntry.avatar}"`);
+        const res = await fetch('/api/characters/get', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ avatar_url: charEntry.avatar }),
+        });
+        if (!res.ok) {
+            console.warn(`[CharacterIndex] Failed to fetch character for world book lookup: HTTP ${res.status}`);
+            return;
+        }
+
+        const characterData = await res.json();
+        const worldName = characterData?.data?.extensions?.world ?? '';
+        if (!worldName) {
+            dbgLog('No world book associated with this character');
+            return;
+        }
+
+        dbgLog(`Deleting world book: "${worldName}"`);
+        const deleteRes = await fetch('/api/worldinfo/delete', {
             method: 'POST',
             headers: getRequestHeaders(),
             body: JSON.stringify({ name: worldName }),
         });
-        if (res.ok) {
+        if (deleteRes.ok) {
             dbgLog(`World book "${worldName}" deleted`);
         } else {
-            console.warn(`[CharacterIndex] World book delete failed: HTTP ${res.status}`);
+            console.warn(`[CharacterIndex] World book delete failed: HTTP ${deleteRes.status}`);
         }
     } catch (err) {
         console.error('[CharacterIndex] World book delete error:', err);
+    }
+}
+
+/**
+ * Converts embedded character_book (entries array) to world info format (entries object).
+ * Reverse of `convertWorldInfoToCharacterBook` in src/endpoints/characters.js.
+ * @param {{ entries: object[], name: string }} characterBook
+ * @returns {object} World info data
+ */
+function _convertCharacterBookToWorldInfo(characterBook) {
+    const result = { ...characterBook, entries: {} };
+    for (let i = 0; i < characterBook.entries.length; i++) {
+        const entry = characterBook.entries[i];
+        result.entries[i.toString()] = {
+            uid: entry.id,
+            key: entry.keys,
+            keysecondary: entry.secondary_keys,
+            comment: entry.comment,
+            content: entry.content,
+            constant: entry.constant,
+            selective: entry.selective,
+            order: entry.insertion_order,
+            disable: !entry.enabled,
+            position: entry.position === 'before_char' ? 0 : 1,
+            use_regex: entry.use_regex ?? true,
+            excludeRecursion: entry.extensions?.exclude_recursion,
+            displayIndex: entry.extensions?.display_index,
+            probability: entry.extensions?.probability ?? null,
+            useProbability: entry.extensions?.useProbability ?? false,
+            depth: entry.extensions?.depth ?? 4,
+            selectiveLogic: entry.extensions?.selectiveLogic ?? 0,
+            outletName: entry.extensions?.outlet_name ?? '',
+            group: entry.extensions?.group ?? '',
+            groupOverride: entry.extensions?.group_override ?? false,
+            groupWeight: entry.extensions?.group_weight ?? null,
+            preventRecursion: entry.extensions?.prevent_recursion ?? false,
+            delayUntilRecursion: entry.extensions?.delay_until_recursion ?? false,
+            scanDepth: entry.extensions?.scan_depth ?? null,
+            matchWholeWords: entry.extensions?.match_whole_words ?? null,
+            useGroupScoring: entry.extensions?.use_group_scoring ?? false,
+            caseSensitive: entry.extensions?.case_sensitive ?? null,
+            automationId: entry.extensions?.automation_id ?? '',
+            role: entry.extensions?.role ?? 0,
+            vectorized: entry.extensions?.vectorized ?? false,
+            sticky: entry.extensions?.sticky ?? null,
+            cooldown: entry.extensions?.cooldown ?? null,
+            delay: entry.extensions?.delay ?? null,
+            matchPersonaDescription: entry.extensions?.match_persona_description ?? false,
+            matchCharacterDescription: entry.extensions?.match_character_description ?? false,
+            matchCharacterPersonality: entry.extensions?.match_character_personality ?? false,
+            matchCharacterDepthPrompt: entry.extensions?.match_character_depth_prompt ?? false,
+            matchScenario: entry.extensions?.match_scenario ?? false,
+            matchCreatorNotes: entry.extensions?.match_creator_notes ?? false,
+            triggers: entry.extensions?.triggers ?? [],
+            ignoreBudget: entry.extensions?.ignore_budget ?? false,
+        };
+    }
+    return result;
+}
+
+/**
+ * After character import, reads the new character's embedded character_book and saves
+ * it as a world book file, then associates it via merge-attributes.
+ * @param {string} avatarFileName  e.g. "CharacterName.png"
+ * @param {Function} getRequestHeaders
+ */
+export async function importCharacterWorldBook(avatarFileName, getRequestHeaders) {
+    try {
+        // 1. 读取新导入角色卡的完整数据
+        dbgLog(`Fetching character data to import world book: "${avatarFileName}"`);
+        const res = await fetch('/api/characters/get', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ avatar_url: avatarFileName }),
+        });
+        if (!res.ok) {
+            console.warn(`[CharacterIndex] Failed to fetch character for world book import: HTTP ${res.status}`);
+            return;
+        }
+
+        const characterData = await res.json();
+        const worldName = characterData?.data?.extensions?.world ?? '';
+        const characterBook = characterData?.data?.character_book;
+
+        if (!worldName) {
+            dbgLog('No world book name in imported character');
+            return;
+        }
+
+        if (!characterBook?.entries?.length) {
+            dbgLog('No character_book entries in imported character');
+            return;
+        }
+
+        // 2. 转换格式并调用 /api/worldinfo/edit 保存世界书文件
+        dbgLog(`Saving world book "${worldName}" from embedded character_book`);
+        const worldData = _convertCharacterBookToWorldInfo(characterBook);
+        const editRes = await fetch('/api/worldinfo/edit', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ name: worldName, data: worldData }),
+        });
+        if (editRes.ok) {
+            dbgLog(`World book "${worldName}" saved`);
+        } else {
+            console.warn(`[CharacterIndex] World book save failed: HTTP ${editRes.status}`);
+        }
+
+        // 3. 调用 /api/characters/merge-attributes 关联世界书到角色卡
+        dbgLog(`Associating world book "${worldName}" with character`);
+        const mergeRes = await fetch('/api/characters/merge-attributes', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({
+                avatar: avatarFileName,
+                data: { extensions: { world: worldName } },
+            }),
+        });
+        if (mergeRes.ok) {
+            dbgLog(`World book "${worldName}" associated with character`);
+        } else {
+            console.warn(`[CharacterIndex] World book association failed: HTTP ${mergeRes.status}`);
+        }
+    } catch (err) {
+        console.error('[CharacterIndex] World book import error:', err);
     }
 }
 

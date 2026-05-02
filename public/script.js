@@ -285,7 +285,7 @@ import { MacroEnvBuilder } from './scripts/macros/engine/MacroEnvBuilder.js';
 import { MacroEngine } from './scripts/macros/engine/MacroEngine.js';
 import { addChatBackupsBrowser } from './scripts/chat-backups.js';
 import { onboardingExperimentalMacroEngine } from './scripts/macros/engine/MacroDiagnostics.js';
-import { initCharacterIndex, loadCharacterIndexAll, openCharacterIndexSettings, handleImportDuplicate } from './scripts/characters-index.js';
+import { initCharacterIndex, loadCharacterIndexAll, openCharacterIndexSettings, handleImportDuplicate, importCharacterWorldBook } from './scripts/characters-index.js';
 
 // API OBJECT FOR EXTERNAL WIRING
 globalThis.SillyTavern = {
@@ -10378,6 +10378,7 @@ export async function processDroppedFiles(files, data = new Map()) {
     if (avatarFileNames.length > 0) {
         await importCharactersTags(avatarFileNames);
         selectImportedChar(avatarFileNames[avatarFileNames.length - 1]);
+        location.reload();
     }
 }
 
@@ -10501,6 +10502,15 @@ async function importCharacter(file, { preserveFileName = '', importTags = false
                     }
                 } catch (err) {
                     console.error('[CharacterIndex] Post-import rename error:', err);
+                }
+            }
+
+            // If index is enabled and this was an overwrite/replace, import the new character's world book
+            if (globalThis.characterIndexEnabled && preserveFileName) {
+                try {
+                    await importCharacterWorldBook(avatarFileName, getRequestHeaders);
+                } catch (err) {
+                    console.error('[CharacterIndex] Post-import world book import error:', err);
                 }
             }
 
@@ -11953,6 +11963,7 @@ jQuery(async function () {
         if (avatarFileNames.length > 0) {
             await importCharactersTags(avatarFileNames);
             selectImportedChar(avatarFileNames[avatarFileNames.length - 1]);
+            location.reload();
         }
 
         // Clear the file input value to allow re-uploading the same file
