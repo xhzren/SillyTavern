@@ -20,7 +20,21 @@ import chalk from 'chalk';
 import bytes from 'bytes';
 import { LOG_LEVELS, CHAT_COMPLETION_SOURCES, MEDIA_REQUEST_TYPE } from './constants.js';
 import { serverDirectory } from './server-directory.js';
-import { sync as writeFileAtomicSync } from 'write-file-atomic';
+import { sync as _writeFileAtomicSync } from 'write-file-atomic';
+
+/** Wraps write-file-atomic with EPERM fallback for Windows (antivirus / file locking) */
+function writeFileAtomicSync(filePath, data, options) {
+    try {
+        _writeFileAtomicSync(filePath, data, options);
+    } catch (err) {
+        if (err.code === 'EPERM' && process.platform === 'win32') {
+            try { fs.unlinkSync(filePath); } catch (_) { /* ignore */ }
+            fs.writeFileSync(filePath, data, options);
+        } else {
+            throw err;
+        }
+    }
+}
 import { isFirefox } from './express-common.js';
 
 /**

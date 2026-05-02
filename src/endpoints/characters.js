@@ -5,7 +5,21 @@ import { Buffer } from 'node:buffer';
 
 import express from 'express';
 import sanitize from 'sanitize-filename';
-import { sync as writeFileAtomicSync } from 'write-file-atomic';
+import { sync as _writeFileAtomicSync } from 'write-file-atomic';
+
+/** Wraps write-file-atomic with EPERM fallback for Windows (antivirus / file locking) */
+function writeFileAtomicSync(filePath, data, options) {
+    try {
+        _writeFileAtomicSync(filePath, data, options);
+    } catch (err) {
+        if (err.code === 'EPERM' && process.platform === 'win32') {
+            try { fs.unlinkSync(filePath); } catch (_) { /* ignore */ }
+            fs.writeFileSync(filePath, data, options);
+        } else {
+            throw err;
+        }
+    }
+}
 import yaml from 'yaml';
 import _ from 'lodash';
 import mime from 'mime-types';
