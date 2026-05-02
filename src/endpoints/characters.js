@@ -329,9 +329,8 @@ async function tryReadImage(imgPath, crop) {
     try {
         const rawImg = await Jimp.read(imgPath);
         return await applyAvatarCropResize(rawImg, crop);
-    }
-    // If it's an unsupported type of image (APNG) - just read the file as buffer
-    catch (error) {
+    } catch (error) {
+        // If it's an unsupported type of image (APNG) - just read the file as buffer
         console.error(`Failed to read image: ${imgPath}`, error);
         return fs.readFileSync(imgPath);
     }
@@ -428,8 +427,7 @@ export const processCharacter = async (item, directories, { shallow, skipCache =
         character.date_last_chat = dateLastChat;
         character.data_size = calculateDataSize(jsonObject?.data);
         return shallow ? toShallow(character) : character;
-    }
-    catch (err) {
+    } catch (err) {
         console.error(`Could not process character: ${item}`);
 
         if (err instanceof SyntaxError) {
@@ -644,7 +642,6 @@ function charaFormatData(data, directories) {
             if (file && file.entries) {
                 _.set(char, 'data.character_book', convertWorldInfoToCharacterBook(data.world, file.entries));
             }
-
         } catch {
             console.warn(`Failed to read world info file: ${data.world}. Character book will not be available.`);
         }
@@ -926,7 +923,8 @@ async function importFromJson(uploadPath, { request }, preservedFileName) {
         let charJSON = JSON.stringify(char);
         const result = await writeCharacterData(DEFAULT_AVATAR_PATH, charJSON, pngName, request);
         return result ? pngName : '';
-    } else if (jsonData.char_name !== undefined) {//json Pygmalion notepad
+    } else if (jsonData.char_name !== undefined) {
+        //json Pygmalion notepad
         console.info('Importing from gradio json');
         jsonData.char_name = sanitize(jsonData.char_name);
         if (jsonData.creator_notes) {
@@ -1121,8 +1119,7 @@ router.post('/rename', validateAvatarUrlMiddleware, async function (request, res
         console.log('[RENAME] Completed successfully. Sending response.');
         // Return new avatar name to ST
         return response.send({ avatar: newAvatarName });
-    }
-    catch (err) {
+    } catch (err) {
         console.error('[RENAME] FATAL ERROR during rename:', err, err.stack);
         return response.status(500).send({ error: true, message: err.message, stack: err.stack });
     }
@@ -1543,8 +1540,7 @@ router.post('/duplicate', validateAvatarUrlMiddleware, async function (request, 
         fs.copyFileSync(filename, newFilename);
         console.info(`${filename} was copied to ${newFilename}`);
         response.send({ path: path.parse(newFilename).base });
-    }
-    catch (error) {
+    } catch (error) {
         console.error(error);
         return response.send({ error: true });
     }
@@ -1580,8 +1576,7 @@ router.post('/export', validateAvatarUrlMiddleware, async function (request, res
                     const jsonObject = getCharaCardV2(JSON.parse(json), request.user.directories);
                     unsetPrivateFields(jsonObject);
                     return response.type('json').send(JSON.stringify(jsonObject, null, 4));
-                }
-                catch {
+                } catch {
                     return response.sendStatus(400);
                 }
             }
