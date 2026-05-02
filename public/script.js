@@ -4529,7 +4529,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     }
 
     // OPTIMIZATION: Truncate coreChat early to prevent O(N) regex evaluation on thousands of unused messages
-    const contextLimit = getMaxContextSize() * 1.5 + 4000;
+    const contextLimit = getMaxPromptTokens() * 1.5 + 4000;
     const wiDepthLimit = (typeof window.world_info_depth !== 'undefined' && window.world_info_depth > 0) ? window.world_info_depth : 1000;
     
     let requiredMessagesCount = 0;
