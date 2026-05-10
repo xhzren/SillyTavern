@@ -8,7 +8,7 @@
 - **扩展配置重构** — 按扩展名独立存储 JSON，配置更新不丢失
 - **海量消息 (2000+) 优化** — 索引构建防 OOM，增量更新
 - **Windows 兼容** — write-file-atomic EPERM 修复
-
+隐藏消息 Stub 占位分离 — 减少加载/渲染/保存开销
 ---
 
 <a name="readme-top"></a>
