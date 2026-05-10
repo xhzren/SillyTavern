@@ -28,6 +28,9 @@ import {
     getMediaIndex,
     getMediaDisplay,
     chatElement,
+    isHiddenStub,
+    hiddenMessageLines,
+    getLastVisibleMessage,
 } from '../script.js';
 import { selected_group } from './group-chats.js';
 import { power_user } from './power-user.js';
@@ -137,14 +140,17 @@ function getConverter(type) {
 }
 
 /**
- * Mark a range of messages as hidden ("is_system") or not.
- * @param {number} start Starting message ID
- * @param {number} end Ending message ID (inclusive)
+ * Mark a range of messages as hidden or unhidden.
+ * Hidden messages are replaced with lightweight stubs in chat[] and their
+ * raw JSON is cached in hiddenMessageLines (no re-serialization cost).
+ * Unhiding parses the cached raw line back into a full message object.
+ * @param {number} start Starting message ID (chat index)
+ * @param {number} end Ending message ID (inclusive, chat index)
  * @param {boolean} unhide If true, unhide the messages instead.
- * @param {string} nameFitler Optional name filter
+ * @param {string} nameFilter Optional name filter
  * @returns {Promise<void>}
  */
-export async function hideChatMessageRange(start, end, unhide, nameFitler = null) {
+export async function hideChatMessageRange(start, end, unhide, nameFilter = null) {
     if (isNaN(start)) return;
     if (!end) end = start;
     const hide = !unhide;
@@ -152,20 +158,65 @@ export async function hideChatMessageRange(start, end, unhide, nameFitler = null
     for (let messageId = start; messageId <= end; messageId++) {
         const message = chat[messageId];
         if (!message) continue;
-        if (nameFitler && message.name !== nameFitler) continue;
+        if (nameFilter && message.name !== nameFilter) continue;
 
-        message.is_system = hide;
+        if (hide && !isHiddenStub(message)) {
+            // Move to hidden: serialize and replace with stub
+            message.is_system = true;
+            const idx = hiddenMessageLines.length;
+            hiddenMessageLines.push(JSON.stringify(message));
+            chat[messageId] = { __h: true, _i: idx };
+            // Remove DOM element
+            const messageBlock = $(`.mes[mesid="${messageId}"]`);
+            if (messageBlock.length) messageBlock.remove();
+        } else if (unhide && isHiddenStub(message)) {
+            // Restore from hidden: parse cached raw line back
+            const rawLine = hiddenMessageLines[message._i];
+            if (!rawLine) continue;
+            try {
+                const restored = JSON.parse(rawLine);
+                restored.is_system = false;
+                chat[messageId] = restored;
+                hiddenMessageLines[message._i] = null; // mark for compaction
+            } catch { /* skip corrupted lines */ }
+        }
+    }
 
-        // Also toggle "hidden" state for all visible messages
-        const messageBlock = $(`.mes[mesid="${messageId}"]`);
-        if (!messageBlock.length) continue;
-        messageBlock.attr('is_system', String(hide));
+    // Compact null entries and re-index stubs
+    compactHiddenLines();
+
+    if (unhide) {
+        // Re-render from the start index to restore DOM for unhidden messages.
+        // Use printMessages() for a clean full reload when unhiding.
+        await printMessages();
     }
 
     // Reload swipes. Useful when a last message is hidden.
     refreshSwipeButtons();
 
     await saveChatConditional();
+}
+
+/**
+ * Removes null entries from hiddenMessageLines and updates all stub _i references.
+ */
+function compactHiddenLines() {
+    const newLines = [];
+    const oldToNew = new Map();
+    for (let i = 0; i < hiddenMessageLines.length; i++) {
+        if (hiddenMessageLines[i] !== null) {
+            oldToNew.set(i, newLines.length);
+            newLines.push(hiddenMessageLines[i]);
+        }
+    }
+    hiddenMessageLines.length = 0;
+    hiddenMessageLines.push(...newLines);
+    // Update stub references
+    for (const msg of chat) {
+        if (isHiddenStub(msg) && oldToNew.has(msg._i)) {
+            msg._i = oldToNew.get(msg._i);
+        }
+    }
 }
 
 /**

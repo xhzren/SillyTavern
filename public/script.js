@@ -437,6 +437,50 @@ export function invalidateMessageHtmlCache(message) {
     }
 }
 
+// ======= Hidden message archive system =======
+// Hidden messages are stored as raw JSON strings in hiddenMessageLines[],
+// while chat[] holds full objects for visible messages and lightweight stubs
+// ({__h: true, _i: N}) for hidden ones. This preserves chat.length and
+// chat[index] integrity while avoiding JSON.parse, DOM creation, and
+// re-serialization costs for hidden messages.
+/** @type {string[]} */
+export let hiddenMessageLines = [];
+
+const HIDDEN_MARKER = '__h';
+const HIDDEN_INDEX_KEY = '_i';
+
+export function isHiddenStub(message) {
+    return message && message[HIDDEN_MARKER] === true;
+}
+
+function createHiddenStub(hiddenLineIndex) {
+    return { [HIDDEN_MARKER]: true, [HIDDEN_INDEX_KEY]: hiddenLineIndex };
+}
+
+export function clearHiddenMessages() {
+    hiddenMessageLines.length = 0;
+}
+
+/**
+ * Finds the index of the last visible (non-stub) message in chat[].
+ * @returns {number} The index, or -1 if none found.
+ */
+export function getLastVisibleMessageIndex() {
+    for (let i = chat.length - 1; i >= 0; i--) {
+        if (!isHiddenStub(chat[i])) return i;
+    }
+    return -1;
+}
+
+/**
+ * Returns the last visible message object, or null if all are hidden.
+ * @returns {?ChatMessage}
+ */
+export function getLastVisibleMessage() {
+    const idx = getLastVisibleMessageIndex();
+    return idx >= 0 ? chat[idx] : null;
+}
+
 /**
  * @type {import('./scripts/constants.js').SWIPE_STATE}
  */
@@ -1537,6 +1581,7 @@ export async function showMoreMessages(messagesToLoad = null) {
     const firstId = clamp(messageId - count, 0, Infinity);
     const messageElements = [];
     chat.slice(firstId, messageId).forEach((message, id) => {
+        if (isHiddenStub(message)) return;
         messageElements.push(updateMessageElement(message, { messageId: firstId + id }));
     });
     // This could be faster: https://developer.mozilla.org/en-US/docs/Web/API/Element/insertAdjacentElement
@@ -1596,18 +1641,22 @@ export async function redisplayChat({ targetChat = chat, startIndex = 0, fade = 
     const messages = targetChat.slice(startIndex);
 
     if (messages.length > 0) {
-        const newMessageElements = messages.map((message, offset) => {
+        const newMessageElements = [];
+        for (let offset = 0; offset < messages.length; offset++) {
+            const message = messages[offset];
+            if (isHiddenStub(message)) continue;
             const i = startIndex + offset;
             const messageElement = updateMessageElement(message, { messageId: i });
+            newMessageElements.push(messageElement[0]);
+        }
 
-            return messageElement[0];
-        });
+        if (newMessageElements.length > 0) {
+            //The last_mes has been removed, add it to the new last message.
+            newMessageElements.at(-1).classList.add('last_mes');
 
-        //The last_mes has been removed, add it to the new last message.
-        newMessageElements.at(-1).classList.add('last_mes');
-
-        //Append to chat in one DOM update.
-        chatElement.append(newMessageElements);
+            //Append to chat in one DOM update.
+            chatElement.append(newMessageElements);
+        }
 
         applyCharacterTagsToMessageDivs({ mesIds: lodash.range(startIndex, targetChat.length, 1) });
     }
@@ -1673,6 +1722,7 @@ export function cancelDebouncedChatSave() {
  */
 export async function clearChat({ clearData = false } = {}) {
     messageHtmlCache.clear();
+    clearHiddenMessages();
     cancelDebouncedChatSave();
     cancelDebouncedMetadataSave();
     closeMessageEditor();
@@ -1694,8 +1744,10 @@ export async function clearChat({ clearData = false } = {}) {
 }
 
 export async function deleteLastMessage() {
-    deleteItemizedPromptForMessage(chat.length - 1);
-    chat.length = chat.length - 1;
+    const lastIdx = getLastVisibleMessageIndex();
+    if (lastIdx < 0) return;
+    deleteItemizedPromptForMessage(lastIdx);
+    chat.splice(lastIdx, 1);
     chatElement.children('.mes').last().remove();
     await eventSource.emit(event_types.MESSAGE_DELETED, chat.length);
 }
@@ -1809,12 +1861,11 @@ export async function sendTextareaMessage() {
     // "Continue on send" is activated when the user hits "send" (or presses enter) on an empty chat box, and the last
     // message was sent from a character (not the user or the system).
     const textareaText = String($('#send_textarea').val());
-    const lastMessage = chat[chat.length - 1];
-    if (power_user.continue_on_send &&
+    const lastMessage = getLastVisibleMessage();
+    if (lastMessage && power_user.continue_on_send &&
         !hasPendingFileAttachment() &&
         !textareaText &&
         !selected_group &&
-        chat.length &&
         !lastMessage.is_user &&
         !lastMessage.is_system
     ) {
@@ -4423,7 +4474,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         return Promise.resolve();
     }
 
-    const lastMessage = chat[chat.length - 1];
+    const lastMessage = getLastVisibleMessage();
 
     let textareaText;
     if (type !== 'regenerate' && type !== 'swipe' && type !== 'quiet' && !isImpersonate && !dryRun && !depth) {
@@ -4432,11 +4483,13 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         $('#send_textarea').val('')[0].dispatchEvent(new Event('input', { bubbles: true }));
     } else {
         textareaText = '';
-        if (chat.length && lastMessage.is_user) {
+        if (chat.length && lastMessage?.is_user) {
             //do nothing? why does this check exist?
         } else if (type !== 'quiet' && type !== 'swipe' && !isImpersonate && !dryRun && !depth && chat.length) {
-            deleteItemizedPromptForMessage(chat.length - 1);
-            chat.length = chat.length - 1;
+            const lastIdx = getLastVisibleMessageIndex();
+            if (lastIdx < 0) return;
+            deleteItemizedPromptForMessage(lastIdx);
+            chat.splice(lastIdx, 1);
             await removeLastMessage();
             await eventSource.emit(event_types.MESSAGE_DELETED, chat.length);
         }
@@ -4523,7 +4576,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     // Collect messages with usable content
     const canUseTools = ToolManager.isToolCallingSupported();
     const canPerformToolCalls = !dryRun && ToolManager.canPerformToolCalls(type) && depth < ToolManager.RECURSE_LIMIT;
-    let coreChat = chat.filter(x => !x.is_system || (canUseTools && Array.isArray(x.extra?.tool_invocations)));
+    let coreChat = chat.filter(x => !isHiddenStub(x) && (!x.is_system || (canUseTools && Array.isArray(x.extra?.tool_invocations))));
     if (type === 'swipe') {
         coreChat.pop();
     }
@@ -6684,7 +6737,8 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         [type, getMessage, fromStreaming, title, swipes, reasoning, imageUrls, reasoningSignature] = arguments;
     }
 
-    const lastMessage = chat[chat.length - 1];
+    const lastMessage = getLastVisibleMessage();
+    if (!lastMessage) return;
 
     if (type != 'append' && type != 'continue' && type != 'appendFinal' && chat.length && (lastMessage.swipe_id === undefined ||
         lastMessage.is_user)) {
@@ -7464,11 +7518,24 @@ export async function saveChat({ chatName, withMetadata, mesId, force = false, c
 
     characters[this_chid].date_last_chat = Date.now();
 
-    const trimmedChat = Array.isArray(chatData)
+    const rawChat = Array.isArray(chatData)
         ? chatData
         : (mesId !== undefined && mesId >= 0 && mesId < chat.length)
             ? chat.slice(0, Number(mesId) + 1)
             : chat.slice();
+
+    // Resolve stubs to full message objects for serialization.
+    // Hidden messages are parsed from their cached raw JSON lines.
+    const trimmedChat = rawChat.map(msg => {
+        if (isHiddenStub(msg)) {
+            const rawLine = hiddenMessageLines[msg[HIDDEN_INDEX_KEY]];
+            if (rawLine) {
+                try { return JSON.parse(rawLine); } catch { return null; }
+            }
+            return null;
+        }
+        return msg;
+    }).filter(x => x !== null);
 
     /** @type {ChatHeader} */
     const chatHeader = {
@@ -7696,18 +7763,35 @@ export async function getChat() {
             throw new Error('Chat could not be loaded');
         }
 
+        // The server returns a JSON array: [header, msg1, msg2, ...]
+        // Hidden messages (is_system === true) are re-serialized into
+        // hiddenMessageLines[] and replaced with lightweight stubs in chat[].
         const data = await response.json();
+
+        chat.length = 0;
+        hiddenMessageLines.length = 0;
+
         if (Array.isArray(data) && data.length > 0) {
-            /** @type {ChatHeader} */
-            const chatHeader = data.shift();
+            // First element is the chat header
+            const chatHeader = data[0];
             chat_metadata = chatHeader?.chat_metadata ?? {};
-            chat.splice(0, chat.length, ...data);
-            chat.forEach(ensureMessageMediaIsArray);
+
+            for (let i = 1; i < data.length; i++) {
+                const msg = data[i];
+                if (msg && msg.is_system === true) {
+                    const idx = hiddenMessageLines.length;
+                    hiddenMessageLines.push(JSON.stringify(msg));
+                    chat.push(createHiddenStub(idx));
+                } else if (msg) {
+                    chat.push(msg);
+                    ensureMessageMediaIsArray(msg);
+                }
+            }
         } else {
             // An empty/corrupted chat file
-            chat.splice(0, chat.length);
             chat_metadata = {};
         }
+
         if (!chat_metadata.integrity) {
             chat_metadata.integrity = uuidv4();
         }
@@ -9509,9 +9593,15 @@ export async function importCharacterChat(formData, { refresh = true } = {}) {
 export function updateViewMessageIds(startIndex = null) {
     const minId = startIndex ?? getFirstDisplayedMessageId();
 
+    let chatIdx = minId;
     chatElement.find('.mes').each(function (index, element) {
-        $(element).attr('mesid', minId + index);
-        $(element).find('.mesIDDisplay').text(`#${minId + index}`);
+        // Skip stubs in chat[] to keep DOM mesids aligned with actual chat indices
+        while (chatIdx < chat.length && isHiddenStub(chat[chatIdx])) {
+            chatIdx++;
+        }
+        $(element).attr('mesid', chatIdx);
+        $(element).find('.mesIDDisplay').text(`#${chatIdx}`);
+        chatIdx++;
     });
 
     chatElement.find('.mes').removeClass('last_mes');
@@ -9993,9 +10083,24 @@ function formatSwipeCounter(current, total) {
  * @param {number} [params.forceSwipeId] The target swipe_id. When out of range, it will be looped or clamped.
  * @param {number} [params.forceDuration] Overwrites the default swipe duration.
  */
-export async function swipe(event, direction, { source, repeated, message = chat[chat.length - 1], forceMesId, forceSwipeId, forceDuration } = {}) {
+export async function swipe(event, direction, { source, repeated, message = null, forceMesId, forceSwipeId, forceDuration } = {}) {
     if (chat.length === 0) {
         console.warn('Swipe was called on an empty chat.');
+        return;
+    }
+
+    // Default to last visible message if not specified
+    if (!message && forceMesId === undefined) {
+        message = getLastVisibleMessage();
+        if (!message) {
+            console.warn('Swipe was called but no visible messages found.');
+            return;
+        }
+    }
+
+    // Safety: never swipe a stub
+    if (message && isHiddenStub(message)) {
+        console.warn('Swipe was called on a hidden message stub. Skipping.');
         return;
     }
 
