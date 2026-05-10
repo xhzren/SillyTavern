@@ -31,6 +31,7 @@ import {
     isHiddenStub,
     hiddenMessageLines,
     getLastVisibleMessage,
+    markChatEdited,
 } from '../script.js';
 import { selected_group } from './group-chats.js';
 import { power_user } from './power-user.js';
@@ -183,7 +184,7 @@ export async function hideChatMessageRange(start, end, unhide, nameFilter = null
     }
 
     // Compact null entries and re-index stubs
-    chat_metadata.tainted = true;
+    markChatEdited();
     compactHiddenLines();
 
     if (unhide) {

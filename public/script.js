@@ -454,6 +454,23 @@ export let hiddenMessageLines = [];
  */
 let lastSavedLength = 0;
 
+/**
+ * Whether any existing message has been edited, deleted, hidden or had
+ * its swipe modified since the last full save. Distinct from chat_metadata.tainted
+ * which tracks "ever modified" for pristine-chat detection.
+ * Reset to false after every successful full save.
+ * @type {boolean}
+ */
+let editSinceLastSave = false;
+
+/**
+ * Marks the chat as having been edited since the last save.
+ * Causes the next save to be a full save rather than an incremental append.
+ */
+export function markChatEdited() {
+    editSinceLastSave = true;
+}
+
 const HIDDEN_MARKER = '__h';
 const HIDDEN_INDEX_KEY = '_i';
 
@@ -1756,6 +1773,7 @@ export async function deleteLastMessage() {
     const lastIdx = getLastVisibleMessageIndex();
     if (lastIdx < 0) return;
     deleteItemizedPromptForMessage(lastIdx);
+    editSinceLastSave = true;
     chat_metadata.tainted = true;
     chat.splice(lastIdx, 1);
     chatElement.children('.mes').last().remove();
@@ -1809,6 +1827,7 @@ export async function deleteMessage(id, swipeDeletionIndex = undefined, askConfi
     chat.splice(id, 1);
     messageElement.remove();
 
+    editSinceLastSave = true;
     chat_metadata.tainted = true;
 
     const startIndex = [0, minId].includes(id) ? id : null;
@@ -4498,6 +4517,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         } else if (type !== 'quiet' && type !== 'swipe' && !isImpersonate && !dryRun && !depth && chat.length) {
             const lastIdx = getLastVisibleMessageIndex();
             if (lastIdx < 0) return;
+            editSinceLastSave = true;
             deleteItemizedPromptForMessage(lastIdx);
             chat.splice(lastIdx, 1);
             await removeLastMessage();
@@ -7533,10 +7553,19 @@ export async function saveChat({ chatName, withMetadata, mesId, force = false, c
 
     // Determine whether we can do an incremental append (only new messages, no edits).
     // External data, trim saves, and modified chats always require a full save.
+    // Uses editSinceLastSave (not chat_metadata.tainted) because tainted is set
+    // at generation start and must stay true for pristine-chat detection.
     const canAppend = !hasExternalData && !isTrimSave
-        && !chat_metadata.tainted
+        && !editSinceLastSave
         && chat.length > lastSavedLength
         && lastSavedLength > 0;
+
+    console.debug('[saveChat] canAppend check:', {
+        hasExternalData, isTrimSave,
+        editSinceLastSave,
+        chatLength: chat.length, lastSavedLength,
+        canAppend,
+    });
 
     if (canAppend) {
         // Incremental save: only send messages added since last save.
@@ -7622,7 +7651,7 @@ export async function saveChat({ chatName, withMetadata, mesId, force = false, c
 
         if (result.ok) {
             lastSavedLength = chat.length;
-            chat_metadata.tainted = false;
+            editSinceLastSave = false;
             return;
         }
 
@@ -7863,7 +7892,7 @@ export async function getChat() {
         // For existing chats, all messages are already on disk.
         // For new chats (no file yet), set to 0 to force a full save with header.
         lastSavedLength = isExistingChat ? chat.length : 0;
-        chat_metadata.tainted = false;
+        editSinceLastSave = false;
         eventSource.emit(event_types.CHAT_LOADED, { detail: { id: this_chid, character: characters[this_chid] } });
 
         // Focus on the textarea if not already focused on a visible text input
@@ -8383,6 +8412,7 @@ function updateMessage(div) {
     }
 
     chat_metadata.tainted = true;
+    editSinceLastSave = true;
 
     return { mesBlock, text, mes, bias };
 }
@@ -8582,6 +8612,7 @@ async function messageEditMove(sourceId, targetId) {
     }
 
     swapItemizedPrompts(sourceId, targetId);
+    editSinceLastSave = true;
     updateViewMessageIds();
     refreshSwipeButtons();
     await saveChatConditional();
@@ -9575,6 +9606,7 @@ export async function deleteSwipe(swipeId = null, messageId = chat.length - 1) {
     }
 
     chat_metadata.tainted = true;
+    editSinceLastSave = true;
 
     messageId = Number(messageId);
     swipeId = Number(swipeId);
@@ -11992,6 +12024,7 @@ jQuery(async function () {
             chatElement.find(`.mes[mesid="${this_del_mes}"]`).nextAll('div').remove();
             chatElement.find(`.mes[mesid="${this_del_mes}"]`).remove();
             chat.length = this_del_mes;
+            editSinceLastSave = true;
             chat_metadata.tainted = true;
             await saveChatConditional();
             chatElement.scrollTop(chatElement[0].scrollHeight);
