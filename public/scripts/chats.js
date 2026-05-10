@@ -183,6 +183,7 @@ export async function hideChatMessageRange(start, end, unhide, nameFilter = null
     }
 
     // Compact null entries and re-index stubs
+    chat_metadata.tainted = true;
     compactHiddenLines();
 
     if (unhide) {

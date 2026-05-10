@@ -446,6 +446,14 @@ export function invalidateMessageHtmlCache(message) {
 /** @type {string[]} */
 export let hiddenMessageLines = [];
 
+/**
+ * Number of messages in chat[] at the time of last successful save.
+ * Used for incremental save: when only new messages are appended,
+ * only the new portion is sent to the server.
+ * @type {number}
+ */
+let lastSavedLength = 0;
+
 const HIDDEN_MARKER = '__h';
 const HIDDEN_INDEX_KEY = '_i';
 
@@ -1723,6 +1731,7 @@ export function cancelDebouncedChatSave() {
 export async function clearChat({ clearData = false } = {}) {
     messageHtmlCache.clear();
     clearHiddenMessages();
+    lastSavedLength = 0;
     cancelDebouncedChatSave();
     cancelDebouncedMetadataSave();
     closeMessageEditor();
@@ -1747,6 +1756,7 @@ export async function deleteLastMessage() {
     const lastIdx = getLastVisibleMessageIndex();
     if (lastIdx < 0) return;
     deleteItemizedPromptForMessage(lastIdx);
+    chat_metadata.tainted = true;
     chat.splice(lastIdx, 1);
     chatElement.children('.mes').last().remove();
     await eventSource.emit(event_types.MESSAGE_DELETED, chat.length);
@@ -7518,9 +7528,60 @@ export async function saveChat({ chatName, withMetadata, mesId, force = false, c
 
     characters[this_chid].date_last_chat = Date.now();
 
-    const rawChat = Array.isArray(chatData)
+    const hasExternalData = Array.isArray(chatData);
+    const isTrimSave = mesId !== undefined && mesId >= 0 && mesId < chat.length;
+
+    // Determine whether we can do an incremental append (only new messages, no edits).
+    // External data, trim saves, and modified chats always require a full save.
+    const canAppend = !hasExternalData && !isTrimSave
+        && !chat_metadata.tainted
+        && chat.length > lastSavedLength
+        && lastSavedLength > 0;
+
+    if (canAppend) {
+        // Incremental save: only send messages added since last save.
+        const newMessages = chat.slice(lastSavedLength);
+        // Resolve any stubs in the new portion (edge case, typically none).
+        const resolved = newMessages.map(msg => {
+            if (isHiddenStub(msg)) {
+                const rawLine = hiddenMessageLines[msg[HIDDEN_INDEX_KEY]];
+                if (rawLine) {
+                    try { return JSON.parse(rawLine); } catch { return null; }
+                }
+                return null;
+            }
+            return msg;
+        }).filter(x => x !== null);
+
+        if (resolved.length > 0) {
+            try {
+                const appendRequest = await compressRequest({
+                    method: 'POST',
+                    cache: 'no-cache',
+                    headers: getRequestHeaders(),
+                    body: JSON.stringify({
+                        ch_name: characters[this_chid].name,
+                        file_name: fileName,
+                        chat: resolved,
+                        avatar_url: characters[this_chid].avatar,
+                    }),
+                });
+                const result = await fetch('/api/chats/append', appendRequest);
+                if (result.ok) {
+                    lastSavedLength = chat.length;
+                    return;
+                }
+                // Fall through to full save on append failure
+                console.warn('Incremental save failed, falling back to full save');
+            } catch {
+                // Fall through to full save
+            }
+        }
+    }
+
+    const rawChat = hasExternalData
         ? chatData
-        : (mesId !== undefined && mesId >= 0 && mesId < chat.length)
+        : isTrimSave
             ? chat.slice(0, Number(mesId) + 1)
             : chat.slice();
 
@@ -7560,6 +7621,8 @@ export async function saveChat({ chatName, withMetadata, mesId, force = false, c
         const result = await fetch('/api/chats/save', saveChatRequest);
 
         if (result.ok) {
+            lastSavedLength = chat.length;
+            chat_metadata.tainted = false;
             return;
         }
 
@@ -7795,7 +7858,12 @@ export async function getChat() {
         if (!chat_metadata.integrity) {
             chat_metadata.integrity = uuidv4();
         }
+        const isExistingChat = Array.isArray(data) && data.length > 0;
         await getChatResult();
+        // For existing chats, all messages are already on disk.
+        // For new chats (no file yet), set to 0 to force a full save with header.
+        lastSavedLength = isExistingChat ? chat.length : 0;
+        chat_metadata.tainted = false;
         eventSource.emit(event_types.CHAT_LOADED, { detail: { id: this_chid, character: characters[this_chid] } });
 
         // Focus on the textarea if not already focused on a visible text input
