@@ -468,37 +468,6 @@ export async function trySaveChat(chatData, filePath, skipIntegrityCheck = false
     getBackupFunction(handle)(backupDirectory, cardName, jsonlData);
 }
 
-router.post('/append', validateAvatarUrlMiddleware, async function (request, response) {
-    try {
-        const handle = request.user.profile.handle;
-        const cardName = String(request.body.avatar_url).replace('.png', '');
-        const newMessages = request.body.chat;
-        const chatFileName = `${String(request.body.file_name)}.jsonl`;
-        const chatFilePath = path.join(request.user.directories.chats, cardName, sanitize(chatFileName));
-        if (!isPathUnderParent(request.user.directories.chats, chatFilePath)) {
-            return response.sendStatus(400);
-        }
-
-        if (!Array.isArray(newMessages) || newMessages.length === 0) {
-            return response.status(400).send({ error: 'The request\'s body.chat is not a non-empty array.' });
-        }
-
-        // Append new JSONL lines to the existing file
-        const newLines = '\n' + newMessages.map(m => JSON.stringify(m)).join('\n');
-        fs.appendFileSync(chatFilePath, newLines, 'utf8');
-
-        // Backup: read the full file and pass to backup function
-        const fullData = tryReadFileSync(chatFilePath) ?? '';
-        getBackupFunction(handle)(request.user.directories.backups, cardName, fullData);
-
-        await updateCharacterChatDateInIndex(request.user.directories, request.body.avatar_url, Date.now());
-        return response.send({ ok: true });
-    } catch (error) {
-        console.error(error);
-        return response.status(500).send({ error: 'An error has occurred, see the console logs for more information.' });
-    }
-});
-
 router.post('/save', validateAvatarUrlMiddleware, async function (request, response) {
     try {
         const handle = request.user.profile.handle;
