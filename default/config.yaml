@@ -204,6 +204,11 @@ performance:
   memoryCacheCapacity: '100mb'
   # Enables disk caching for character cards. Improves performances with large card libraries.
   useDiskCache: true
+  # Caches rendered message HTML (regex + Markdown + sanitizer output) keyed by message object.
+  # Avoids re-running the full formatting pipeline on every redraw/redisplay.
+  # Cache is auto-invalidated on message edit, swipe, or global settings change.
+  # Disable to always run the full messageFormatting() pipeline (impacts performance with large chats).
+  messageRenderCache: true
   # Configures gzip compression for client requests with large payloads (e.g. settings or chat saves).
   requestCompression:
     # Enable request compression.

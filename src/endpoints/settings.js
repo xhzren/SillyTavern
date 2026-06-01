@@ -18,6 +18,7 @@ const ENABLE_REQUEST_COMPRESSION = !!getConfigValue('performance.requestCompress
 const REQUEST_COMPRESSION_MIN = bytes.parse(getConfigValue('performance.requestCompression.minPayloadSize', '256kb'));
 const REQUEST_COMPRESSION_MAX = bytes.parse(getConfigValue('performance.requestCompression.maxPayloadSize', '8mb'));
 const REQUEST_COMPRESSION_TIMEOUT = Number(getConfigValue('performance.requestCompression.timeout', 3000, 'number'));
+const ENABLE_MESSAGE_RENDER_CACHE = getConfigValue('performance.messageRenderCache', true, 'boolean');
 
 // 10 minutes
 const AUTOSAVE_INTERVAL = 10 * 60 * 1000;
@@ -637,6 +638,7 @@ router.post('/get', (request, response) => {
         enable_extensions: ENABLE_EXTENSIONS,
         enable_extensions_auto_update: ENABLE_EXTENSIONS_AUTO_UPDATE,
         enable_accounts: ENABLE_ACCOUNTS,
+        enable_message_render_cache: ENABLE_MESSAGE_RENDER_CACHE,
         request_compression: {
             enabled: ENABLE_REQUEST_COMPRESSION,
             minPayloadSize: REQUEST_COMPRESSION_MIN || 0,

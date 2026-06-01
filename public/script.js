@@ -414,9 +414,16 @@ export let chat = [];
  * Cache for rendered HTML strings, keyed by message object reference.
  * Using a Map (not WeakMap) so we can call .clear() on global settings changes.
  * Entries are auto-removed when clearChat() is called.
+ * Controlled by config.yaml: performance.messageRenderCache
  * @type {Map<ChatMessage, string>}
  */
 const messageHtmlCache = new Map();
+
+/**
+ * Whether the HTML render cache is enabled (set from server config).
+ * @type {boolean}
+ */
+let messageRenderCacheEnabled = true;
 
 /**
  * Clears the entire HTML render cache.
@@ -2599,7 +2606,7 @@ function getMessageTextHTML(message, { messageId = chat.indexOf(message) }) {
     // Also skip caching system UI messages since they may rely on special sanitizer state.
     const isCacheable = messageId !== 0 && !message.extra?.uses_system_ui;
 
-    if (isCacheable && messageHtmlCache.has(message)) {
+    if (messageRenderCacheEnabled && isCacheable && messageHtmlCache.has(message)) {
         console.log(`[HTML Cache] HIT  mesId=${messageId} name="${message.name}" cacheSize=${messageHtmlCache.size}`);
         return messageHtmlCache.get(message);
     }
@@ -2616,7 +2623,7 @@ function getMessageTextHTML(message, { messageId = chat.indexOf(message) }) {
     );
     const elapsed = (performance.now() - t0).toFixed(2);
 
-    if (isCacheable) {
+    if (messageRenderCacheEnabled && isCacheable) {
         messageHtmlCache.set(message, html);
         console.log(`[HTML Cache] MISS  mesId=${messageId} name="${message.name}" renderTime=${elapsed}ms cacheSize=${messageHtmlCache.size}`);
     } else {
@@ -8065,6 +8072,7 @@ export async function getSettings(initLoaderHandle = null) {
         accountStorage.init(settings?.accountStorage);
         await setUserControls(data.enable_accounts);
         setRequestCompressionConfig(data.request_compression);
+        messageRenderCacheEnabled = data.enable_message_render_cache !== false;
 
         // Allow subscribers to mutate settings
         await eventSource.emit(event_types.SETTINGS_LOADED_BEFORE, settings);
